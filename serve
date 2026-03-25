@@ -1,0 +1,1 @@
+go run ./cmd/morph --config config.yaml serve

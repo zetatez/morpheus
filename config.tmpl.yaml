@@ -1,0 +1,244 @@
+workspace_root: ./
+
+logging:
+  level: info
+  file: ~/.local/share/morpheus/logs/morpheus.log
+
+planner:
+  # Provider options: openai, minmax, glm, gemini, deepseek, builtin
+  provider: deepseek
+  model: deepseek-chat
+  temperature: 0.2
+  api_key: ${DEEPSEEK_API_KEY}
+  # endpoint: https://api.deepseek.com/v1/chat/completions (默认)
+
+server:
+  listen: :8080
+  limits:
+    enabled: true
+    max_cpu_percent: 85
+    max_memory_percent: 85
+    sample_interval_ms: 1000
+
+# Session memory (per-session storage)
+session:
+  path: ~/.local/share/morpheus/sessions
+  sqlite_path: ~/.local/share/morpheus/sessions.db
+  retention: 720h
+
+mcp:
+  servers: []
+  # Example:
+  # servers:
+  #   - name: filesystem
+  #     transport: stdio
+  #     command: npx -y @modelcontextprotocol/server-filesystem .
+  #   - name: remote-demo
+  #     transport: http
+  #     url: https://example.com/mcp
+  #     sse_url: https://example.com/mcp/sse
+  #     auth_header: Authorization
+  #     auth_token: Bearer ${MCP_TOKEN}
+
+# Knowledge base - files for AI to search with grep
+knowledge_base:
+  path: ~/.config/morpheus/knowledge_base
+
+permissions:
+  # Risk level >= this value requires user confirmation
+  confirm_above: high
+
+  # Protected paths - all operations require confirmation
+  confirm_protected_paths:
+    # System critical directories
+    - /etc
+    - /usr/bin
+    - /usr/sbin
+    - /usr/local/bin
+    - /usr/local/sbin
+    - /var
+    - /var/log
+    - /var/etc
+    - /boot
+    - /sys
+    - /proc
+    - /dev
+
+    # Sensitive data directories
+    - ~/.ssh
+    - ~/.aws
+    - ~/.gnupg
+    - ~/.kube
+    - ~/.docker
+    - ~/.git-credentials
+    - ~/.aws/credentials
+    - ~/.ssh/id_rsa
+    - ~/.ssh/id_ed25519
+
+    # User configuration directories
+    - ~/.config
+    - ~/.local
+    - ~/.cache
+    - ~/.npm
+    - ~/.pip
+
+  # Risk factors
+  risk_factors:
+    # Critical danger - immediate high risk
+    critical:
+      # Disk write/erase
+      - "dd\\s+of="
+      - "dd\\s+if=.*of=/dev/"
+      - "shred"
+      # Filesystem operations
+      - "mkfs"
+      - "mkfs\\."
+      - "fdisk"
+      - "parted"
+      # Device file write
+      - ">:/dev/"
+      - ">\\s*/dev/"
+      - "echo\\s+.*\\s*>\\s*/dev/"
+      # Boot modification
+      - "systemctl\\s+enable"
+      - "systemctl\\s+start.*@"
+      # SSH key operations
+      - "ssh-keygen.*-t\\s+rsa"
+
+    # High risk - requires confirmation
+    high:
+      # Recursive delete
+      - "rm\\s+-[rf]"
+      - "rm\\s+-[rfv]"
+      - "rmdir"
+      - "rm\\s+-R"
+      - "rm\\s+--recursive"
+      # Remote script execution
+      - "curl.*\\|.*sh"
+      - "wget.*\\|.*sh"
+      - "fetch.*\\|.*sh"
+      - "curl.*\\|\\s*bash"
+      - "wget.*-O-\\s*\\|"
+      # Privilege escalation
+      - "chmod\\s+([ugo]+=[+,-][rwxst]+)\\s*-R"
+      - "chmod\\s+[47]777"
+      - "chmod\\s+[0-7]{4,4}\\s*-R"
+      # User/group operations
+      - "useradd"
+      - "userdel"
+      - "groupadd"
+      - "groupdel"
+      - "usermod"
+      - "passwd\\s+root"
+      # Service management
+      - "systemctl\\s+stop"
+      - "systemctl\\s+restart"
+      - "service\\s+stop"
+      - "service\\s+restart"
+      # Network operations
+      - "iptables"
+      - "ufw\\s+allow"
+      - "ufw\\s+deny"
+      - "firewall-cmd"
+      - "nc\\s+-l\\s+-p"
+      - "ncat\\s+-l"
+      # Process operations
+      - "kill\\s+-9"
+      - "killall"
+      - "pkill\\s+-9"
+      # Environment injection
+      - "export\\s+.*=.*\\$\\("
+      - "env\\s+.*=.*\\`"
+
+    # Medium risk - careful operations
+    medium:
+      # Permission changes
+      - "chmod\\s+[0-9]{3,3}"
+      - "chown"
+      - "chgrp"
+      - "setfacl"
+      - "setfattr"
+      # Process management
+      - "kill\\s+-[0-9]+"
+      - "killall\\s+-i"
+      - "pkill"
+      - "kill\\s+(?!-9)"
+      # File operations
+      - "tee"
+      - "dd\\s+of="
+      - ">\\s*[^/]"
+      - "touch\\s+/etc"
+      - "touch\\s+/var"
+      # Package managers
+      - "apt\\s+remove"
+      - "apt\\s+purge"
+      - "apt-get\\s+remove"
+      - "yum\\s+remove"
+      - "dnf\\s+remove"
+      - "pip\\s+uninstall"
+      - "npm\\s+uninstall"
+      - "gem\\s+uninstall"
+      # System modifications
+      - "sysctl"
+      - "echo\\s+.*\\s*>\\s*/proc"
+      - "mount\\s+-o\\s+remount"
+      - "umount"
+      # Backup/restore
+      - "tar\\s+-cvzf.*--exclude"
+      - "rsync.*--delete"
+
+    # Low risk - routine operations
+    low:
+      # Install commands
+      - "pip\\s+install"
+      - "pip3\\s+install"
+      - "npm\\s+install"
+      - "npm\\s+i"
+      - "yarn\\s+add"
+      - "pnpm\\s+add"
+      - "apt\\s+install"
+      - "apt-get\\s+install"
+      - "yum\\s+install"
+      - "dnf\\s+install"
+      - "brew\\s+install"
+      - "gem\\s+install"
+      - "cargo\\s+install"
+      - "go\\s+install"
+      - "composer\\s+require"
+      # Downloads
+      - "curl\\s+-O"
+      - "curl\\s+--output"
+      - "wget"
+      - "fetch"
+      - "aria2c"
+      # Network checks
+      - "ping"
+      - "traceroute"
+      - "tracepath"
+      - "netstat"
+      - "ss\\s+-tuln"
+      - "curl"
+      - "wget"
+      - "httpie"
+      # System queries
+      - "df\\s+-h"
+      - "du\\s+-sh"
+      - "free\\s+-m"
+      - "top"
+      - "htop"
+      - "ps\\s+aux"
+      - "lsblk"
+      - "mount\\s+-l"
+      # Build/test
+      - "make\\s+build"
+      - "make\\s+install"
+      - "cmake"
+      - "go\\s+build"
+      - "go\\s+run"
+      - "go\\s+test"
+      - "npm\\s+run"
+      - "npm\\s+test"
+      - "yarn\\s+run"
+      - "pytest"
+      - "cargo\\s+build"
+      - "cargo\\s+test"

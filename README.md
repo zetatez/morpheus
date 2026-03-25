@@ -1,0 +1,392 @@
+# Morpheus
+
+Morpheus is a local AI agent runtime with tool execution, session persistence, MCP protocol support, and an interactive TUI client.
+
+## Features
+
+- **AI Agent Runtime**: Iterative agent execution with tool calling
+- **Multi-Agent Coordination**: Built-in coordinator with parallel task execution
+- **Subagents**: Built-in roles for coordination (implementer, explorer, reviewer, architect)
+- **Tool Ecosystem**: File operations, command execution, LSP, Git, web fetch
+- **MCP Protocol**: Full MCP client support (stdio/HTTP/SSE transports)
+- **Session Persistence**: SQLite + file storage with smart context compression
+- **Multi-Model Support**: OpenAI, DeepSeek, MiniMax, GLM, Gemini, or builtin keyword planner
+- **TUI Client**: Interactive terminal UI with chat interface
+- **REST API**: Programmatic access with streaming support
+- **Configurable SOUL**: Custom agent personality via SOUL.md
+- **Skills System**: 9 built-in skills + custom skills with lazy loading
+
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/zetatez/morpheus.git
+cd morpheus
+go build -o morph ./cmd/morph
+```
+
+### Quick Start
+
+```bash
+# Run with REPL mode (requires bun for TUI)
+./morph repl
+
+# Or start API server only
+./morph serve
+```
+
+## Configuration
+
+Create `config.yaml` in one of these locations (in order of priority):
+
+1. `./config.yaml` (current directory)
+2. `~/.config/morpheus/config.yaml`
+3. `~/.morpheus/config.yaml`
+
+### Example Configuration
+
+```yaml
+workspace_root: ./
+
+logging:
+  level: info
+  file: ~/.local/share/morpheus/logs/morpheus.log
+
+planner:
+  provider: deepseek        # openai, deepseek, minmax, glm, gemini, builtin
+  model: deepseek-chat
+  temperature: 0.2
+  api_key: ${DEEPSEEK_API_KEY}
+
+subagents:
+  default_mode: build      # build (full access) | plan (read-only)
+
+server:
+  listen: :8080
+
+session:
+  path: ~/.local/share/morpheus/sessions
+  sqlite_path: ~/.local/share/morpheus/sessions.db
+  retention: 720h
+
+mcp:
+  servers:
+    - name: filesystem
+      transport: stdio
+      command: npx -y @modelcontextprotocol/server-filesystem .
+
+permissions:
+  confirm_above: high
+  confirm_protected_paths:
+    - /etc
+    - /usr/bin
+    - ~/.ssh
+```
+
+### Interactive Confirmation
+
+Morpheus supports interactive confirmation for high-risk operations:
+
+- When a risky command is detected, Morpheus will prompt for approval
+- Reply `approve` to proceed or `deny` to cancel
+- By default `auto_approve: true` - set to `false` for interactive mode
+- `confirm_above` controls threshold: `low`, `medium`, `high`, `critical`
+
+### Agent Modes
+
+| Mode | Description |
+|------|-------------|
+| `build` | Full access - can execute commands and write files |
+| `plan` | Read-only - generates plans without executing |
+
+### Custom Subagents
+
+Custom subagents are loaded lazily from markdown files in:
+
+- `~/.config/morpheus/subagents/<name>.md`
+
+They are only loaded when the user explicitly references the subagent name in the conversation.
+
+Example `~/.config/morpheus/subagents/release-notes.md`:
+
+```markdown
+---
+name: release-notes
+description: Draft release notes from git history.
+tools:
+  - fs.read
+  - git.*
+---
+Write release notes in Markdown. Focus on user-facing changes and breaking changes first.
+```
+
+### Multi-Agent Coordination
+
+Morpheus automatically coordinates multiple specialized subagents (up to 9) for complex tasks:
+
+| Subagent | Description |
+|-------|-------------|
+| `implementer` | Delivers concrete code changes |
+| `explorer` | Investigates codebase details |
+| `reviewer` | Reviews changes for risks |
+| `architect` | Designs high-level approach |
+| `tester` | Writes and verifies tests |
+| `devops` | Handles deployment and CI/CD |
+| `data` | Works with data pipelines |
+| `security` | Reviews security vulnerabilities |
+| `docs` | Creates documentation |
+
+**DAG Scheduling**: Tasks can have dependencies (`depends_on`). Morpheus automatically performs topological sort and executes tasks in the correct order.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `BRUTECODE_API_KEY` | Fallback API key |
+| `OPENAI_API_KEY` | OpenAI provider |
+| `DEEPSEEK_API_KEY` | DeepSeek provider |
+| `MINMAX_API_KEY` | MiniMax provider |
+| `GLM_API_KEY` | GLM provider |
+| `GEMINI_API_KEY` | Gemini provider |
+
+## CLI Commands
+
+### REPL Mode
+
+```bash
+morph repl                      # Start with TUI frontend
+morph repl --session my-session # Resume specific session
+morph repl --prompt "task"      # Run initial prompt
+morph repl --url http://host:8080  # Connect to remote server
+morph repl --model gpt-4o       # Specify model
+morph repl --plan               # Plan mode (read-only)
+```
+
+### Server Mode
+
+```bash
+morph serve                     # Start HTTP API server
+morph serve --config path/to/config.yaml
+```
+
+## REST API
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/chat` | Chat with agent |
+| POST | `/api/v1/plan` | Generate plan |
+| POST | `/api/v1/execute` | Execute plan |
+| POST | `/api/v1/tasks` | Create task |
+| GET | `/api/v1/tasks/{id}` | Get task status |
+| GET | `/api/v1/sessions` | List sessions |
+| GET | `/api/v1/sessions/{id}` | Get session |
+| GET | `/api/v1/skills` | List skills |
+| POST | `/api/v1/models/select` | Switch model |
+| GET | `/api/v1/models` | List models |
+| POST | `/repl` | REPL endpoint |
+| POST | `/repl/stream` | Streaming REPL |
+
+### Chat Example
+
+```bash
+curl -X POST http://localhost:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session": "default", "input": "Hello"}'
+```
+
+### Streaming Example
+
+```bash
+curl -X POST http://localhost:8080/repl/stream \
+  -H "Content-Type: application/json" \
+  -d '{"session": "default", "input": "List files"}' \
+  -N
+```
+
+## Tools
+
+Morpheus provides these built-in tools:
+
+| Tool | Description |
+|------|-------------|
+| `fs.read` | Read file contents |
+| `fs.write` | Write file contents |
+| `fs.edit` | Edit file with replacement |
+| `fs.glob` | Glob pattern matching |
+| `fs.grep` | Text search in files |
+| `cmd.exec` | Execute shell commands |
+| `lsp.query` | LSP operations (definition, references, etc.) |
+| `git.*` | Git operations |
+| `web.fetch` | Fetch web pages |
+| `conversation.ask` | Ask user questions |
+| `skill.invoke` | Invoke skills |
+| `mcp.query` | Manage MCP servers |
+| `mcp.<server>.<tool>` | MCP proxy tools |
+| `agent.run` | Run sub-agent |
+
+## MCP Protocol
+
+Morpheus supports MCP (Model Context Protocol) for external tool integration.
+
+### Configure MCP Servers
+
+```yaml
+mcp:
+  servers:
+    # stdio transport (local process)
+    - name: filesystem
+      transport: stdio
+      command: npx -y @modelcontextprotocol/server-filesystem .
+
+    # HTTP transport (remote)
+    - name: remote
+      transport: http
+      url: https://example.com/mcp
+      sse_url: https://example.com/mcp/sse
+      auth_token: ${MCP_TOKEN}
+```
+
+### MCP Tool Usage
+
+```bash
+# Connect to server
+mcp.query({"action": "connect", "name": "filesystem", "command": "npx -y @modelcontextprotocol/server-filesystem ."})
+
+# List tools
+mcp.query({"action": "tools", "name": "filesystem"})
+
+# Call MCP tool
+mcp.filesystem.read_file({"path": "/path/to/file"})
+```
+
+## SOUL
+
+Morpheus loads SOUL (system prompt) from:
+
+1. `~/.config/morpheus/SOUL.md` (user-level)
+2. Built-in default SOUL
+
+The built-in SOUL defines Morpheus's core personality:
+
+## Skills
+
+Morpheus provides built-in skills that can be invoked with `@skill`:
+
+```bash
+@review Review code changes
+@test Recommend tests
+@docs Draft documentation
+@refactor Suggest improvements
+@debug Help diagnose issues
+@security Review for vulnerabilities
+@git Git workflow guidance
+@explain Explain code or concepts
+@optimize Performance optimization
+```
+
+### Custom Skills
+
+Create custom skills in one of these locations:
+
+- `~/.config/morpheus/skills/` (user-level)
+- `.morpheus/skills/` (project-level)
+
+```
+~/.config/morpheus/skills/
+└── my-skill/
+    ├── skill.yaml
+    └── prompt.md
+```
+
+**skill.yaml Example**:
+
+```yaml
+name: my-skill
+description: Custom skill description
+capabilities:
+  - custom
+expected_token_cost: 1000
+```
+
+**prompt.md Example**:
+
+```
+Please help with: {{input}}
+```
+
+Skills use lazy loading - custom skills are loaded on demand when first invoked.
+
+## Session Management
+
+Sessions are stored with two backends:
+
+- **SQLite**: `~/.local/share/morpheus/sessions.db` (default)
+- **File**: `~/.local/share/morpheus/sessions/`
+
+```
+session:
+  path: ~/.local/share/morpheus/sessions
+  sqlite_path: ~/.local/share/morpheus/sessions.db
+  retention: 720h
+```
+
+Morpheus automatically compresses context when tokens exceed 60,000.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CLI / TUI / REST API                        │
+├─────────────────────────────────────────────────────────────────┤
+│                          Runtime                                 │
+│  ┌──────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
+│  │ Conversation │  │   Planner   │  │      Coordinator   │   │
+│  │   Manager    │  │   (LLM)     │  │ (Multi-Agent Exec) │   │
+│  └──────────────┘  └─────────────┘  └─────────────────────┘   │
+│  ┌──────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
+│  │   Skills     │  │   Plugin    │  │   Agent Registry   │   │
+│  │   (Lazy)     │  │   Registry  │  │  (Custom Agents)  │   │
+│  └──────────────┘  └─────────────┘  └─────────────────────┘   │
+│         │                 │                    │               │
+│         └─────────────────┴────────────────────┘               │
+│                              │                                 │
+│              ┌───────────────┴───────────────┐               │
+│              │       Tool Registry            │               │
+│              │  (fs/cmd/agent/mcp/skill/...)  │               │
+│              └───────────────────────────────┘               │
+│                              │                                 │
+│              ┌───────────────┴───────────────┐               │
+│              │      Policy Engine            │               │
+│              │   (Risk Assessment)           │               │
+│              └───────────────────────────────┘               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+See [docs/architecture.md](docs/architecture.md) for details.
+
+## Development
+
+```bash
+# Run from source
+go run ./cmd/morph
+
+# Run tests
+go test ./...
+
+# Build
+go build -o morph ./cmd/morph
+```
+
+## Tech Stack
+
+- **Backend**: Go 1.25
+- **CLI**: Cobra + OpenTUI (Solid.js/Bun)
+- **Frontend**: TypeScript + Bun
+- **LLM**: OpenAI API compatible (OpenAI, DeepSeek, MiniMax, GLM, Gemini)
+
+## License
+
+MIT
