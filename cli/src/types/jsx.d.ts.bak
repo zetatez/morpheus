@@ -1,0 +1,77 @@
+import type { JSX } from "solid-js"
+import type { TextAttribute, InputRenderable, TextareaRenderable, ScrollBoxRenderable, PasteEvent } from "../core/terminal"
+
+declare module "solid-js" {
+  namespace JSX {
+    interface IntrinsicElements {
+      box: BoxAttributes
+      text: TextAttributes
+      scrollbox: ScrollboxAttributes
+      textarea: TextareaAttributes
+      input: InputAttributes
+    }
+  }
+}
+
+interface BoxAttributes extends JSX.HTMLAttributes<HTMLDivElement> {
+  flexDirection?: "row" | "column"
+  width?: number
+  height?: number
+  backgroundColor?: string | number
+  paddingLeft?: number
+  paddingRight?: number
+  paddingTop?: number
+  paddingBottom?: number
+  justifyContent?: "flexStart" | "flexEnd" | "center" | "spaceBetween" | "spaceAround"
+  alignItems?: "flexStart" | "flexEnd" | "center" | "stretch"
+  flexGrow?: number
+  flexShrink?: number
+  flexWrap?: "nowrap" | "wrap"
+  marginRight?: number
+  marginBottom?: number
+  children?: unknown
+}
+
+interface TextAttributes extends JSX.HTMLAttributes<HTMLSpanElement> {
+  fg?: string | number
+  bg?: string | number
+  attributes?: TextAttribute
+  children?: unknown
+}
+
+interface ScrollboxAttributes extends JSX.HTMLAttributes<HTMLDivElement> {
+  ref?: (val: ScrollBoxRenderable) => void
+  width?: number
+  height?: number
+  paddingLeft?: number
+  paddingRight?: number
+  paddingTop?: number
+  children?: unknown
+}
+
+interface TextareaAttributes extends JSX.HTMLAttributes<HTMLTextAreaElement> {
+  ref?: (val: TextareaRenderable) => void
+  value?: string
+  height?: number
+  focused?: boolean
+  textColor?: string | number
+  focusedTextColor?: string | number
+  cursorColor?: string | number
+  placeholder?: string
+  onContentChange?: () => void
+  onSubmit?: () => void
+  onPaste?: (evt: PasteEvent) => void
+  keyBindings?: Array<{ name: string; shift?: boolean; action: string }>
+}
+
+interface InputAttributes extends JSX.HTMLAttributes<HTMLInputElement> {
+  ref?: (val: InputRenderable) => void
+  value?: string
+  focused?: boolean
+  placeholder?: string
+  textColor?: string | number
+  focusedTextColor?: string | number
+  cursorColor?: string | number
+  onInput?: (value: string) => void
+  onSubmit?: (value: string) => void
+}

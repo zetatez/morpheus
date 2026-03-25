@@ -1,0 +1,2 @@
+cd cli && bun install && cd ..
+go run ./cmd/morpheus --config config.yaml repl

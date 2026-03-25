@@ -1,0 +1,1 @@
+go run ./cmd/morpheus --config config.yaml serve

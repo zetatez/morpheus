@@ -1,0 +1,54 @@
+project_name: morpheus
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: morpheus
+    main: ./cmd/morpheus
+    binary: morpheus
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/zetatez/morpheus/internal/cli.Version={{.Version}}
+      - -X github.com/zetatez/morpheus/internal/cli.Commit={{.Commit}}
+      - -X github.com/zetatez/morpheus/internal/cli.Date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - config.tmpl.yaml
+      - LICENSE
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
+
+changelog:
+  use: github-native
+
+release:
+  github:
+    owner: zetatez
+    name: morpheus
+  draft: true
+
+announce:
+  github:
+    draft: true

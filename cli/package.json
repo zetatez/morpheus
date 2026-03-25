@@ -1,0 +1,39 @@
+{
+  "name": "morpheus-cli",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build.rollup.js && bun run dist/index.js",
+    "start": "bun run build.rollup.js && bun run dist/index.js",
+    "build": "bun run build.rollup.js"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.97",
+    "@opentui/solid": "^0.1.97",
+    "clipboardy": "*",
+    "file-type": "^21.3.4",
+    "jsdiff": "^1.1.1",
+    "shiki": "^4.0.2",
+    "solid-js": "^1.9.12",
+    "table": "^6.9.0",
+    "yargs": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/plugin-transform-react-jsx": "^7.28.6",
+    "@babel/preset-typescript": "^7.28.5",
+    "@rollup/plugin-babel": "^7.0.0",
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@types/node": "^25.5.2",
+    "babel-preset-solid": "^1.9.12",
+    "esbuild": "^0.28.0",
+    "esbuild-plugin-solid": "^0.6.0",
+    "rollup": "^4.60.1",
+    "tsx": "*",
+    "typescript": "*",
+    "vite": "^8.0.8",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}
