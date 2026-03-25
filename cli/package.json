@@ -1,0 +1,22 @@
+{
+  "name": "morpheus-cli",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --preload @opentui/solid/preload src/index.tsx",
+    "start": "bun --preload @opentui/solid/preload src/index.tsx",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@opentui/core": "*",
+    "@opentui/solid": "*",
+    "clipboardy": "*",
+    "solid-js": "*",
+    "yargs": "*"
+  },
+  "devDependencies": {
+    "tsx": "*",
+    "typescript": "*"
+  }
+}
