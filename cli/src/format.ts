@@ -81,18 +81,13 @@ export function formatToolOutput(step: PlanStep, result: ToolResult | null): str
     const commandLine = formatShellCommand(stringify(inputs.command))
     const stdout = truncate(stringify(data.stdout), MAX_PREVIEW)
     const stderr = truncate(stringify(data.stderr), MAX_PREVIEW)
-    const exitCode = stringify(data.exit_code)
     if (stdout || stderr) {
       return joinLines(
         header,
         note,
         thinking,
         ...args.lines,
-        exitCode ? `Exit: ${exitCode}` : "",
-        stdout ? "Stdout:" : "",
-        wrapCodeBlock(commandLine, "bash"),
-        stdout ? wrapCodeBlock(stdout) : "",
-        stderr ? "# Error" : "",
+        wrapCodeBlock(commandLine + (stdout ? `\n\n${stdout}` : ""), "bash"),
         stderr ? wrapCodeBlock(stderr, "stderr") : "",
       )
     }
@@ -102,18 +97,31 @@ export function formatToolOutput(step: PlanStep, result: ToolResult | null): str
       thinking,
       ...args.lines,
       wrapCodeBlock(commandLine, "bash"),
-      exitCode ? `Command finished (exit ${exitCode})` : "Command finished",
     )
   }
 
   if (step.tool === "web.fetch") {
     const body = stringify(data.body || data.text)
+    const status = stringify(data.status)
+    const contentType = stringify(data.content_type)
+    const summary = body ? formatWebFetchSummary(String(inputs.url || ""), body) : []
+    const concise = formatWebFetchConciseBody(body, contentType)
+    if (summary.length || concise || status || contentType) {
+      const meta: string[] = []
+      if (status) meta.push(`Status: ${status}`)
+      if (contentType) meta.push(`Type: ${contentType}`)
+      return joinLines(
+        header,
+        note,
+        thinking,
+        ...args.lines,
+        meta.join(" · "),
+        ...(summary.length ? summary : concise ? [concise] : []),
+      )
+    }
     if (body) {
       const pretty = formatMaybeJSON(body)
       const lang = pretty.isJSON ? "json" : ""
-      const status = stringify(data.status)
-      const contentType = stringify(data.content_type)
-      const summary = formatWebFetchSummary(String(inputs.url || ""), pretty.text)
       const preview = truncate(pretty.text, 240)
       return joinLines(
         header,
@@ -122,7 +130,6 @@ export function formatToolOutput(step: PlanStep, result: ToolResult | null): str
         ...args.lines,
         status ? `Status: ${status}` : "",
         contentType ? `Type: ${contentType}` : "",
-        ...(summary.length ? summary : []),
         wrapCodeBlock(preview, lang),
       )
     }
@@ -130,9 +137,7 @@ export function formatToolOutput(step: PlanStep, result: ToolResult | null): str
 
   if (Array.isArray((data as { matches?: unknown }).matches)) {
     const matches = (data as { matches: unknown[] }).matches
-    const list = matches.slice(0, MAX_MATCHES).map((item) => stringify(item))
-    const suffix = matches.length > MAX_MATCHES ? " …" : ""
-    return joinLines(header, note, thinking, ...args.lines, `Matches (${matches.length}): ${list.join(", ")}${suffix}`)
+    return joinLines(header, note, thinking, ...args.lines, `${matches.length} results`)
   }
 
   const preferred =
@@ -372,6 +377,22 @@ function formatMaybeJSON(text: string): { text: string; isJSON: boolean } {
 
 function formatWebFetchSummary(url: string, body: string): string[] {
   return formatWeatherSummary(body) || formatFxSummary(url, body) || formatNewsSummary(body) || []
+}
+
+function formatWebFetchConciseBody(body: string, contentType: string): string {
+  const trimmed = body.trim()
+  if (!trimmed) return ""
+  const lowerType = (contentType || "").toLowerCase()
+  if (lowerType.includes("xml") || trimmed.startsWith("<?xml") || trimmed.startsWith("<rss") || trimmed.startsWith("<feed")) {
+    return "Fetched structured feed data."
+  }
+  if (trimmed.startsWith("<html") || trimmed.startsWith("<!doctype html")) {
+    return "Fetched webpage content."
+  }
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return "Fetched structured data."
+  }
+  return "Fetched text content."
 }
 
 function formatWeatherSummary(body: string): string[] | null {

@@ -1,7 +1,7 @@
 export type Entry = {
   id: string
-  role: "user" | "assistant" | "tool" | "error" | "system"
+  role: "user" | "assistant" | "tool" | "error" | "system" | "queue"
   title?: string
   content: string
-  kind?: "thinking" | "summary" | "default"
+  kind?: "thinking" | "summary" | "queued" | "default"
 }

@@ -75,6 +75,7 @@ export function App(props) {
     const [lastConfirmID, setLastConfirmID] = createSignal(null);
     const [pendingConfirmation, setPendingConfirmation] = createSignal(null);
     const [expandedToolEntries, setExpandedToolEntries] = createSignal(new Set());
+    const [queuedRequests, setQueuedRequests] = createSignal([]);
     const [monitorActive, setMonitorActive] = createSignal(false);
     const [attachments, setAttachments] = createSignal([]);
     const [escapePressed, setEscapePressed] = createSignal(false);
@@ -92,6 +93,46 @@ export function App(props) {
     let textarea;
     let suppressHistoryChange = false;
     const toolEntryByCallID = new Map();
+    const processNextQueuedRequest = () => {
+        if (inputQueue.length === 0 || isProcessingQueue)
+            return false;
+        const next = inputQueue.shift();
+        if (!next)
+            return false;
+        isProcessingQueue = true;
+        queueMicrotask(async () => {
+            try {
+                await submit(next.text, next.entryId);
+            }
+            finally {
+                isProcessingQueue = false;
+                if (!busy())
+                    processNextQueuedRequest();
+            }
+        });
+        return true;
+    };
+    const finishCurrentAndMaybeRunNext = () => {
+        setBusy(false);
+        processNextQueuedRequest();
+    };
+    const syncQueuedConversationEntry = () => {
+        const items = queuedRequests();
+        const queueID = "__queued_requests__";
+        if (items.length === 0) {
+            setEntries((prev) => prev.filter((entry) => entry.id !== queueID));
+            return;
+        }
+        const content = `Queued\n${items.map((item) => `- ${item.text}`).join("\n")}`;
+        setEntries((prev) => {
+            const withoutQueue = prev.filter((entry) => entry.id !== queueID);
+            return [...withoutQueue, { id: queueID, role: "queue", content }];
+        });
+    };
+    createEffect(() => {
+        queuedRequests();
+        syncQueuedConversationEntry();
+    });
     const debugEnabled = () => props.debugStream === true;
     const debugLog = (label, payload) => {
         if (!debugEnabled())
@@ -118,6 +159,9 @@ export function App(props) {
         if (textarea)
             textarea.cursorOffset = textarea.plainText.length;
         suppressHistoryChange = false;
+    };
+    const syncInputDraft = () => {
+        setInput(textarea?.plainText ?? "");
     };
     const rememberInput = (value) => {
         const normalized = value;
@@ -201,7 +245,14 @@ export function App(props) {
     };
     const appendEntry = (entry) => {
         debugLog("appendEntry", { role: entry.role, kind: entry.kind, title: entry.title, preview: entry.content.slice(0, 240) });
-        setEntries((prev) => [...prev, entry]);
+        setEntries((prev) => {
+            const queueID = "__queued_requests__";
+            const queueIndex = prev.findIndex((item) => item.id === queueID);
+            if (queueIndex < 0 || entry.id === queueID)
+                return [...prev.filter((item) => item.id !== queueID), entry];
+            const withoutQueue = prev.filter((item) => item.id !== queueID);
+            return [...withoutQueue, entry, prev[queueIndex]];
+        });
         queueMicrotask(() => {
             if (scroll)
                 scroll.scrollBy(100000);
@@ -211,6 +262,10 @@ export function App(props) {
     const updateEntryContent = (id, content) => {
         debugLog("updateEntryContent", { id, preview: content.slice(0, 240) });
         setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, content } : e)));
+        queueMicrotask(() => renderer.requestRender());
+    };
+    const updateEntry = (id, updater) => {
+        setEntries((prev) => prev.map((e) => (e.id === id ? updater(e) : e)));
         queueMicrotask(() => renderer.requestRender());
     };
     const isConfirmationPrompt = (reply) => {
@@ -276,17 +331,7 @@ export function App(props) {
                         content: err instanceof Error ? err.message : String(err),
                     });
                 }
-                setBusy(false);
-                if (inputQueue.length > 0 && !isProcessingQueue) {
-                    isProcessingQueue = true;
-                    const next = inputQueue.shift();
-                    if (next) {
-                        queueMicrotask(() => {
-                            submit(next.text, next.entryId);
-                            isProcessingQueue = false;
-                        });
-                    }
-                }
+                finishCurrentAndMaybeRunNext();
                 return;
             }
         }
@@ -299,6 +344,7 @@ export function App(props) {
         // Get current attachments and clear for next input
         const currentAttachments = attachments();
         setAttachments([]);
+        syncInputDraft();
         setInput("");
         textarea?.clear();
         if (modal()) {
@@ -334,7 +380,7 @@ export function App(props) {
                     content: err instanceof Error ? err.message : String(err),
                 });
             }
-            setBusy(false);
+            finishCurrentAndMaybeRunNext();
             return;
         }
         // Allow slash-commands (like /exit) even while busy,
@@ -343,12 +389,15 @@ export function App(props) {
         if (busy() && trimmed !== "approve" && trimmed !== "deny") {
             const entryId = crypto.randomUUID();
             inputQueue.push({ text: trimmed, entryId });
-            appendEntry({ id: entryId, role: "user", content: trimmed + " (queued)" });
+            setQueuedRequests((prev) => [...prev, { id: entryId, text: trimmed }]);
             return;
         }
         setBusy(true);
         abortController = new AbortController();
         const entryId = queuedEntryId || crypto.randomUUID();
+        if (queuedEntryId) {
+            setQueuedRequests((prev) => prev.filter((item) => item.id !== queuedEntryId));
+        }
         appendEntry({ id: entryId, role: "user", content: trimmed });
         let assistantReplyText = "";
         let finalReply = null;
@@ -362,8 +411,8 @@ export function App(props) {
         setActiveStreamToken(streamToken);
         const isCurrentStream = () => activeStreamToken() === streamToken;
         const formatFailureSummary = (message) => {
-            const detail = message.trim() || "未拿到更具体的错误信息。";
-            return `问题：\n- ${detail}\n\n已尝试：\n- 已执行本轮推理和必要的工具调用\n- 已根据返回结果继续推进或重试\n\n建议：\n- 调整问题范围后再试一次\n- 如果是外部数据源或网络问题，稍后重试`;
+            const detail = message.trim() || "No additional error details were provided.";
+            return `Issue:\n- ${detail}\n\nTried:\n- Completed this reasoning pass and any needed tool calls\n- Continued or retried based on the returned results\n\nSuggestions:\n- Narrow the request and try again\n- If this depends on external data or the network, try again shortly`;
         };
         const formatSuccessSummary = (text) => {
             const trimmed = cleanFinalAnswer(text);
@@ -482,13 +531,15 @@ export function App(props) {
                 }
                 if (runType === "thinking_started") {
                     const route = String((evt.data.data ?? {})["route"] ?? "");
-                    appendLoopNote("thinking_started", route === "fresh_info" ? "Thinking: querying live information." : String((evt.data.data ?? {})["message"] ?? "Thinking: starting the task."));
+                    if (route !== "fresh_info") {
+                        const message = String((evt.data.data ?? {})["message"] ?? "").trim();
+                        if (message && message !== "Starting the task and checking context.")
+                            appendLoopNote("thinking_started", message);
+                    }
                     return;
                 }
                 if (runType === "tool_execution_started") {
                     setActiveRunBanner("Executing tool...");
-                    const tool = String((evt.data.data ?? {})["tool"] ?? "");
-                    appendLoopNote(`tool-start:${tool}`, phaseNoteForTool(tool || "tool"));
                     return;
                 }
                 if (runType === "tool_execution_finished") {
@@ -529,7 +580,7 @@ export function App(props) {
                     appendEntry({ id: crypto.randomUUID(), role: "error", content: reply });
                 }
                 if (runType === "run_cancelled") {
-                    finalErrorText = "运行已取消。";
+                    finalErrorText = "Run cancelled.";
                     appendEntry({ id: crypto.randomUUID(), role: "system", content: "Run cancelled." });
                 }
                 if (runType === "run_waiting_user") {
@@ -633,7 +684,7 @@ export function App(props) {
                 }
                 if (isCurrentStream())
                     setActiveStreamToken(null);
-                setBusy(false);
+                finishCurrentAndMaybeRunNext();
                 return;
             }
             if (!abortController?.signal.aborted) {
@@ -656,7 +707,7 @@ export function App(props) {
                 }
                 catch (err2) {
                     if (err2 instanceof Error && (err2.name === "AbortError" || err2.message?.includes("aborted"))) {
-                        setBusy(false);
+                        finishCurrentAndMaybeRunNext();
                         return;
                     }
                     appendEntry({
@@ -664,17 +715,17 @@ export function App(props) {
                         role: "error",
                         content: err2 instanceof Error ? err2.message : String(err2),
                     });
-                    setBusy(false);
+                    finishCurrentAndMaybeRunNext();
                     return;
                 }
-                setBusy(false);
+                finishCurrentAndMaybeRunNext();
                 return;
             }
         }
         if (abortController?.signal.aborted) {
             if (isCurrentStream())
                 setActiveStreamToken(null);
-            setBusy(false);
+            finishCurrentAndMaybeRunNext();
             return;
         }
         // If the stream ended but we didn't get deltas, fall back to the final reply.
@@ -686,17 +737,7 @@ export function App(props) {
         }
         if (isCurrentStream())
             setActiveStreamToken(null);
-        setBusy(false);
-        if (inputQueue.length > 0 && !isProcessingQueue) {
-            isProcessingQueue = true;
-            const next = inputQueue.shift();
-            if (next) {
-                queueMicrotask(() => {
-                    submit(next.text, next.entryId);
-                    isProcessingQueue = false;
-                });
-            }
-        }
+        finishCurrentAndMaybeRunNext();
     };
     const modalFilteredItems = createMemo(() => {
         const kind = modal();
@@ -1006,6 +1047,7 @@ export function App(props) {
         const next = formatSessionID();
         setSessionID(next);
         setEntries([]);
+        syncInputDraft();
         setInput("");
         textarea?.clear();
         return next;
@@ -1582,8 +1624,6 @@ export function App(props) {
                     escapeTimeoutRef = undefined;
                     abortController?.abort();
                     abortController = undefined;
-                    setBusy(false);
-                    inputQueue = [];
                     appendEntry({ id: crypto.randomUUID(), role: "assistant", content: "Task cancelled." });
                     return;
                 }
@@ -1748,7 +1788,21 @@ export function App(props) {
                           </text>)}
                       </box>);
                 })()}
-                </box>) : (<text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>)}
+                </box>) : entry.role === "queue" ? (<box flexDirection="column">
+                    <For each={renderMarkdownLines(entry.content ?? "", {
+                        text: theme.muted,
+                        muted: theme.muted,
+                        code: theme.muted,
+                        success: theme.success,
+                        output: theme.muted,
+                        file: theme.file,
+                        accent: theme.muted,
+                        error: theme.error,
+                        thinking: theme.thinking,
+                    })}>
+                      {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
+                    </For>
+                  </box>) : (<text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>)}
             </box>)}
         </For>
       </scrollbox>
@@ -1803,7 +1857,7 @@ export function App(props) {
         <box flexDirection="row" paddingBottom={2}>
           <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
           {currentModel() && <text fg={theme.muted}> · {currentModel()}</text>}
-          {activeRunBanner() && <text fg={theme.file}> · {activeRunBanner()}</text>}
+          {activeRunBanner() && <text fg={theme.muted}> · {activeRunBanner()}</text>}
           <box flexGrow={1}/>
           {notification() ? (<text fg={theme.success}>{notification()}</text>) : (<text fg={theme.muted}>⚡ {serverMetrics()?.resource?.cpu_percent != null ? `${serverMetrics()?.resource?.cpu_percent?.toFixed(0)}%` : "-"}</text>)}
           <box paddingLeft={2}/>
@@ -1828,6 +1882,7 @@ export function App(props) {
         <textarea ref={(val) => (textarea = val)} height={3} focused={!modal()} textColor={theme.text} focusedTextColor={theme.text} cursorColor={theme.primary} onContentChange={() => {
             if (suppressHistoryChange)
                 return;
+            setInput(textarea?.plainText ?? "");
             if (historyIndex() !== null) {
                 setHistoryIndex(null);
             }
@@ -1874,10 +1929,10 @@ export function App(props) {
             }
         }} placeholder={escapePressed()
             ? "Press ESC again to cancel task"
-            : busy()
-                ? "Waiting for response..."
-                : modal()
-                    ? modalHint()
+            : modal()
+                ? modalHint()
+                : busy()
+                    ? "Task running. You can keep typing; new requests will be queued..."
                     : "Ask anything..."}/>
         <box flexDirection="row" paddingTop={1}>
           <text fg={theme.muted}>Tab toggle mode · Ctrl+N new session · Ctrl+C exit · Ctrl+Y copy selection</text>

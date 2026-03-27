@@ -129,6 +129,7 @@ export function App(props: AppProps) {
   const [lastConfirmID, setLastConfirmID] = createSignal<string | null>(null)
   const [pendingConfirmation, setPendingConfirmation] = createSignal<ConfirmationPayload | null>(null)
   const [expandedToolEntries, setExpandedToolEntries] = createSignal<Set<string>>(new Set())
+  const [queuedRequests, setQueuedRequests] = createSignal<{ id: string; text: string }[]>([])
   const [monitorActive, setMonitorActive] = createSignal(false)
   const [attachments, setAttachments] = createSignal<AttachmentInput[]>([])
   const [escapePressed, setEscapePressed] = createSignal(false)
@@ -146,6 +147,45 @@ export function App(props: AppProps) {
   let textarea: TextareaRenderable | undefined
   let suppressHistoryChange = false
   const toolEntryByCallID = new Map<string, string>()
+  const processNextQueuedRequest = () => {
+    if (inputQueue.length === 0 || isProcessingQueue) return false
+    const next = inputQueue.shift()
+    if (!next) return false
+    isProcessingQueue = true
+    queueMicrotask(async () => {
+      try {
+        await submit(next.text, next.entryId)
+      } finally {
+        isProcessingQueue = false
+        if (!busy()) processNextQueuedRequest()
+      }
+    })
+    return true
+  }
+
+  const finishCurrentAndMaybeRunNext = () => {
+    setBusy(false)
+    processNextQueuedRequest()
+  }
+
+  const syncQueuedConversationEntry = () => {
+    const items = queuedRequests()
+    const queueID = "__queued_requests__"
+    if (items.length === 0) {
+      setEntries((prev) => prev.filter((entry) => entry.id !== queueID))
+      return
+    }
+    const content = `Queued\n${items.map((item) => `- ${item.text}`).join("\n")}`
+    setEntries((prev) => {
+      const withoutQueue = prev.filter((entry) => entry.id !== queueID)
+      return [...withoutQueue, { id: queueID, role: "queue", content }]
+    })
+  }
+
+  createEffect(() => {
+    queuedRequests()
+    syncQueuedConversationEntry()
+  })
 
   const debugEnabled = () => props.debugStream === true
 
@@ -172,6 +212,10 @@ export function App(props: AppProps) {
     textarea?.setText(value)
     if (textarea) textarea.cursorOffset = textarea.plainText.length
     suppressHistoryChange = false
+  }
+
+  const syncInputDraft = () => {
+    setInput(textarea?.plainText ?? "")
   }
 
   const rememberInput = (value: string) => {
@@ -260,7 +304,13 @@ export function App(props: AppProps) {
 
   const appendEntry = (entry: Entry) => {
     debugLog("appendEntry", { role: entry.role, kind: entry.kind, title: entry.title, preview: entry.content.slice(0, 240) })
-    setEntries((prev) => [...prev, entry])
+    setEntries((prev) => {
+      const queueID = "__queued_requests__"
+      const queueIndex = prev.findIndex((item) => item.id === queueID)
+      if (queueIndex < 0 || entry.id === queueID) return [...prev.filter((item) => item.id !== queueID), entry]
+      const withoutQueue = prev.filter((item) => item.id !== queueID)
+      return [...withoutQueue, entry, prev[queueIndex]]
+    })
     queueMicrotask(() => {
       if (scroll) scroll.scrollBy(100000)
       renderer.requestRender()
@@ -270,6 +320,11 @@ export function App(props: AppProps) {
   const updateEntryContent = (id: string, content: string) => {
     debugLog("updateEntryContent", { id, preview: content.slice(0, 240) })
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, content } : e)))
+    queueMicrotask(() => renderer.requestRender())
+  }
+
+  const updateEntry = (id: string, updater: (entry: Entry) => Entry) => {
+    setEntries((prev) => prev.map((e) => (e.id === id ? updater(e) : e)))
     queueMicrotask(() => renderer.requestRender())
   }
 
@@ -335,17 +390,7 @@ export function App(props: AppProps) {
             content: err instanceof Error ? err.message : String(err),
           })
         }
-        setBusy(false)
-        if (inputQueue.length > 0 && !isProcessingQueue) {
-          isProcessingQueue = true
-          const next = inputQueue.shift()
-          if (next) {
-            queueMicrotask(() => {
-              submit(next.text, next.entryId)
-              isProcessingQueue = false
-            })
-          }
-        }
+        finishCurrentAndMaybeRunNext()
         return
       }
     }
@@ -361,6 +406,7 @@ export function App(props: AppProps) {
     const currentAttachments = attachments()
     setAttachments([])
 
+    syncInputDraft()
     setInput("")
     textarea?.clear()
     if (modal()) {
@@ -394,7 +440,7 @@ export function App(props: AppProps) {
           content: err instanceof Error ? err.message : String(err),
         })
       }
-      setBusy(false)
+      finishCurrentAndMaybeRunNext()
       return
     }
 
@@ -404,12 +450,15 @@ export function App(props: AppProps) {
     if (busy() && trimmed !== "approve" && trimmed !== "deny") {
       const entryId = crypto.randomUUID()
       inputQueue.push({ text: trimmed, entryId })
-      appendEntry({ id: entryId, role: "user", content: trimmed + " (queued)" })
+      setQueuedRequests((prev) => [...prev, { id: entryId, text: trimmed }])
       return
     }
     setBusy(true)
     abortController = new AbortController()
     const entryId = queuedEntryId || crypto.randomUUID()
+    if (queuedEntryId) {
+      setQueuedRequests((prev) => prev.filter((item) => item.id !== queuedEntryId))
+    }
     appendEntry({ id: entryId, role: "user", content: trimmed })
 
     let assistantReplyText = ""
@@ -426,8 +475,8 @@ export function App(props: AppProps) {
     const isCurrentStream = () => activeStreamToken() === streamToken
 
     const formatFailureSummary = (message: string) => {
-      const detail = message.trim() || "未拿到更具体的错误信息。"
-      return `问题：\n- ${detail}\n\n已尝试：\n- 已执行本轮推理和必要的工具调用\n- 已根据返回结果继续推进或重试\n\n建议：\n- 调整问题范围后再试一次\n- 如果是外部数据源或网络问题，稍后重试`
+      const detail = message.trim() || "No additional error details were provided."
+      return `Issue:\n- ${detail}\n\nTried:\n- Completed this reasoning pass and any needed tool calls\n- Continued or retried based on the returned results\n\nSuggestions:\n- Narrow the request and try again\n- If this depends on external data or the network, try again shortly`
     }
 
     const formatSuccessSummary = (text: string) => {
@@ -539,13 +588,14 @@ export function App(props: AppProps) {
         }
         if (runType === "thinking_started") {
           const route = String((evt.data.data ?? {})["route"] ?? "")
-          appendLoopNote("thinking_started", route === "fresh_info" ? "Thinking: querying live information." : String((evt.data.data ?? {})["message"] ?? "Thinking: starting the task."))
+          if (route !== "fresh_info") {
+            const message = String((evt.data.data ?? {})["message"] ?? "").trim()
+            if (message && message !== "Starting the task and checking context.") appendLoopNote("thinking_started", message)
+          }
           return
         }
         if (runType === "tool_execution_started") {
           setActiveRunBanner("Executing tool...")
-          const tool = String((evt.data.data ?? {})["tool"] ?? "")
-          appendLoopNote(`tool-start:${tool}`, phaseNoteForTool(tool || "tool"))
           return
         }
         if (runType === "tool_execution_finished") {
@@ -585,7 +635,7 @@ export function App(props: AppProps) {
           appendEntry({ id: crypto.randomUUID(), role: "error", content: reply })
         }
         if (runType === "run_cancelled") {
-          finalErrorText = "运行已取消。"
+          finalErrorText = "Run cancelled."
           appendEntry({ id: crypto.randomUUID(), role: "system", content: "Run cancelled." })
         }
         if (runType === "run_waiting_user") {
@@ -683,7 +733,7 @@ export function App(props: AppProps) {
           }
         }
         if (isCurrentStream()) setActiveStreamToken(null)
-        setBusy(false)
+        finishCurrentAndMaybeRunNext()
         return
       }
       if (!abortController?.signal.aborted) {
@@ -705,7 +755,7 @@ export function App(props: AppProps) {
           }
         } catch (err2) {
           if (err2 instanceof Error && (err2.name === "AbortError" || err2.message?.includes("aborted"))) {
-            setBusy(false)
+            finishCurrentAndMaybeRunNext()
             return
           }
           appendEntry({
@@ -713,17 +763,17 @@ export function App(props: AppProps) {
             role: "error",
             content: err2 instanceof Error ? err2.message : String(err2),
           })
-          setBusy(false)
+          finishCurrentAndMaybeRunNext()
           return
         }
-        setBusy(false)
+        finishCurrentAndMaybeRunNext()
         return
       }
     }
 
     if (abortController?.signal.aborted) {
       if (isCurrentStream()) setActiveStreamToken(null)
-      setBusy(false)
+      finishCurrentAndMaybeRunNext()
       return
     }
 
@@ -735,18 +785,7 @@ export function App(props: AppProps) {
     }
 
     if (isCurrentStream()) setActiveStreamToken(null)
-    setBusy(false)
-
-    if (inputQueue.length > 0 && !isProcessingQueue) {
-      isProcessingQueue = true
-      const next = inputQueue.shift()
-      if (next) {
-        queueMicrotask(() => {
-          submit(next.text, next.entryId)
-          isProcessingQueue = false
-        })
-      }
-    }
+    finishCurrentAndMaybeRunNext()
   }
 
   const modalFilteredItems = createMemo(() => {
@@ -1053,6 +1092,7 @@ export function App(props: AppProps) {
     const next = formatSessionID()
     setSessionID(next)
     setEntries([])
+    syncInputDraft()
     setInput("")
     textarea?.clear()
     return next
@@ -1626,8 +1666,6 @@ export function App(props: AppProps) {
           escapeTimeoutRef = undefined
           abortController?.abort()
           abortController = undefined
-          setBusy(false)
-          inputQueue = []
           appendEntry({ id: crypto.randomUUID(), role: "assistant", content: "Task cancelled." })
           return
         } else {
@@ -1833,6 +1871,22 @@ export function App(props: AppProps) {
                     )
                   })()}
                 </box>
+              ) : entry.role === "queue" ? (
+                <box flexDirection="column">
+                  <For each={renderMarkdownLines(entry.content ?? "", {
+                    text: theme.muted,
+                    muted: theme.muted,
+                    code: theme.muted,
+                    success: theme.success,
+                    output: theme.muted,
+                    file: theme.file,
+                    accent: theme.muted,
+                    error: theme.error,
+                    thinking: theme.thinking,
+                  })}>
+                    {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
+                  </For>
+                </box>
               ) : (
                 <text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>
               )}
@@ -1913,7 +1967,7 @@ export function App(props: AppProps) {
         <box flexDirection="row" paddingBottom={2}>
           <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
           {currentModel() && <text fg={theme.muted}> · {currentModel()}</text>}
-          {activeRunBanner() && <text fg={theme.file}> · {activeRunBanner()}</text>}
+          {activeRunBanner() && <text fg={theme.muted}> · {activeRunBanner()}</text>}
           <box flexGrow={1} />
           {notification() ? (
             <text fg={theme.success}>{notification()}</text>
@@ -1952,6 +2006,7 @@ export function App(props: AppProps) {
           cursorColor={theme.primary}
           onContentChange={() => {
             if (suppressHistoryChange) return
+            setInput(textarea?.plainText ?? "")
             if (historyIndex() !== null) {
               setHistoryIndex(null)
             }
@@ -2003,11 +2058,11 @@ export function App(props: AppProps) {
           placeholder={
             escapePressed()
               ? "Press ESC again to cancel task"
-              : busy()
-                ? "Waiting for response..."
-                : modal()
+              : modal()
                   ? modalHint()
-                  : "Ask anything..."
+                  : busy()
+                    ? "Task running. You can keep typing; new requests will be queued..."
+                    : "Ask anything..."
           }
         />
         <box flexDirection="row" paddingTop={1}>
