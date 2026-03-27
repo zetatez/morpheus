@@ -116,6 +116,7 @@ export function App(props: AppProps) {
   const [runsNextCursor, setRunsNextCursor] = createSignal<string | null>(null)
   const [runsStatusFilter, setRunsStatusFilter] = createSignal("")
   const [activeRunBanner, setActiveRunBanner] = createSignal<string | null>(null)
+  const [activeStreamToken, setActiveStreamToken] = createSignal<string | null>(null)
   const [runTimeline, setRunTimeline] = createSignal<string | null>(null)
   const [runTimelineID, setRunTimelineID] = createSignal<string | null>(null)
   const [modalError, setModalError] = createSignal("")
@@ -300,6 +301,10 @@ export function App(props: AppProps) {
     setAgentMode((prev) => (prev === "build" ? "plan" : "build"))
   }
 
+  const agentModeLabel = () => (agentMode() === "build" ? "Build" : "Plan")
+  const agentModeIcon = () => "◆"
+  const agentModeColor = () => (agentMode() === "build" ? "#2f5fd7" : "#2f8f4e")
+
   const submit = async (text: string, queuedEntryId?: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -415,6 +420,10 @@ export function App(props: AppProps) {
     let lastPhaseNote: string | null = null
     let lastLoopEvent: string | null = null
     let fallbackRendered = false
+    const streamToken = crypto.randomUUID()
+    setActiveStreamToken(streamToken)
+
+    const isCurrentStream = () => activeStreamToken() === streamToken
 
     const formatFailureSummary = (message: string) => {
       const detail = message.trim() || "未拿到更具体的错误信息。"
@@ -424,8 +433,7 @@ export function App(props: AppProps) {
     const formatSuccessSummary = (text: string) => {
       const trimmed = cleanFinalAnswer(text)
       if (!trimmed) return ""
-      if (trimmed.startsWith("Result:\n") || trimmed.startsWith("问题：\n")) return trimmed
-      return `Result:\n${trimmed}`
+      return trimmed
     }
 
     const cleanFinalAnswer = (text: string) => {
@@ -444,12 +452,14 @@ export function App(props: AppProps) {
     }
 
     const appendFinalSummary = (text: string) => {
+      if (!isCurrentStream()) return
       if (finalReplyRendered || !text.trim()) return
       appendEntry({ id: crypto.randomUUID(), role: "assistant", content: text, kind: "summary" })
       finalReplyRendered = true
     }
 
     const renderRunSnapshotIfNeeded = (run: ApiResponse) => {
+      if (!isCurrentStream()) return
       if (fallbackRendered) return
       const steps = run.plan?.steps ?? []
       const results = run.results ?? []
@@ -465,8 +475,14 @@ export function App(props: AppProps) {
     }
 
     const appendLoopNote = (eventKey: string, text: string) => {
+      if (!isCurrentStream()) return
       if (lastLoopEvent === eventKey) return
-      if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished")) {
+      const normalized = text.trim()
+      if (!normalized || normalized === "Thinking:" || normalized === "Thinking:\n") {
+        lastLoopEvent = eventKey
+        return
+      }
+      if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished") || text.includes("I have enough information to produce the answer")) {
         lastLoopEvent = eventKey
         return
       }
@@ -475,6 +491,7 @@ export function App(props: AppProps) {
     }
 
     const startConfirmationModal = () => {
+      if (!isCurrentStream()) return
       openConfirmModal(confirmPayload())
     }
 
@@ -506,6 +523,7 @@ export function App(props: AppProps) {
     }
 
     const onStreamEvent = (evt: StreamEvent) => {
+      if (!isCurrentStream()) return
       debugLog("streamEvent", { event: evt.event, data: evt.data })
       if (evt.event === "run_event") {
         currentRunID = evt.data.run_id
@@ -633,8 +651,16 @@ export function App(props: AppProps) {
 
     try {
       await replStream(apiUrl(), { session: sessionID(), input: trimmed, mode: agentMode(), attachments: currentAttachments }, onStreamEvent, abortController?.signal)
+      if (!isCurrentStream()) {
+        setBusy(false)
+        return
+      }
       if (currentRunID) {
         const run = await getRun(apiUrl(), currentRunID)
+        if (!isCurrentStream()) {
+          setBusy(false)
+          return
+        }
         if (!assistantReplyText.trim() && (run.plan?.steps?.length || run.results?.length || run.reply)) {
           renderRunSnapshotIfNeeded(run)
         }
@@ -656,6 +682,7 @@ export function App(props: AppProps) {
             // ignore cancel failures
           }
         }
+        if (isCurrentStream()) setActiveStreamToken(null)
         setBusy(false)
         return
       }
@@ -663,6 +690,10 @@ export function App(props: AppProps) {
         // Fallback to non-streaming endpoint.
         try {
           const response = await client().repl({ session: sessionID(), input: trimmed, mode: agentMode(), attachments: currentAttachments })
+          if (!isCurrentStream()) {
+            setBusy(false)
+            return
+          }
           appendToolEntries(response.plan?.steps ?? [], response.results ?? [])
           if (response.reply) {
             assistantReplyText = response.reply
@@ -691,6 +722,7 @@ export function App(props: AppProps) {
     }
 
     if (abortController?.signal.aborted) {
+      if (isCurrentStream()) setActiveStreamToken(null)
       setBusy(false)
       return
     }
@@ -702,6 +734,7 @@ export function App(props: AppProps) {
       appendFinalSummary(formatFailureSummary(finalErrorText))
     }
 
+    if (isCurrentStream()) setActiveStreamToken(null)
     setBusy(false)
 
     if (inputQueue.length > 0 && !isProcessingQueue) {
@@ -1475,8 +1508,8 @@ export function App(props: AppProps) {
     }
     for (const step of steps) {
       const result = byStep.get(step.id) ?? null
-    const content = formatToolOutput(step, result)
-    appendEntry({ id: crypto.randomUUID(), role: "tool", content })
+      const content = formatToolOutput(step, result)
+      appendEntry({ id: crypto.randomUUID(), role: "tool", content })
     }
   }
 
@@ -1764,7 +1797,7 @@ export function App(props: AppProps) {
                       error: theme.error,
                       thinking: theme.thinking,
                     })
-                    const maxLines = 4
+                    const maxLines = 12
                     const expanded = isToolExpanded(entry.id)
                     const visible = expanded ? lines : lines.slice(0, maxLines)
                     const hiddenCount = lines.length - visible.length
@@ -1878,7 +1911,7 @@ export function App(props: AppProps) {
       )}
       <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
         <box flexDirection="row" paddingBottom={2}>
-          <text fg={theme.primary}>{agentMode() === "build" ? "🔨" : "📋"} {agentMode()}</text>
+          <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
           {currentModel() && <text fg={theme.muted}> · {currentModel()}</text>}
           {activeRunBanner() && <text fg={theme.file}> · {activeRunBanner()}</text>}
           <box flexGrow={1} />

@@ -161,6 +161,8 @@ Rules:
 - Use web.fetch before answering unless you already have verified fresh data in the conversation.
 - Do not stop with generic statements like "I cannot access real-time information" if web.fetch is available.
 - Prefer a direct public source first. If one source fails, try another public source.
+- For simple factual queries like a single current price, rate, weather value, or headline, stop after you have 1-2 credible successful fetches and answer directly.
+- Do not keep browsing once you already have enough evidence to answer the user's exact question.
 - This applies to weather, news, stock prices, exchange rates, flight status, traffic, and other time-sensitive facts.
 - Prefer official or high-signal public endpoints/pages when possible.
 - Keep the final answer concise and based on fetched evidence.

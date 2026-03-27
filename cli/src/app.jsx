@@ -62,6 +62,7 @@ export function App(props) {
     const [runsNextCursor, setRunsNextCursor] = createSignal(null);
     const [runsStatusFilter, setRunsStatusFilter] = createSignal("");
     const [activeRunBanner, setActiveRunBanner] = createSignal(null);
+    const [activeStreamToken, setActiveStreamToken] = createSignal(null);
     const [runTimeline, setRunTimeline] = createSignal(null);
     const [runTimelineID, setRunTimelineID] = createSignal(null);
     const [modalError, setModalError] = createSignal("");
@@ -241,6 +242,9 @@ export function App(props) {
     const toggleAgentMode = () => {
         setAgentMode((prev) => (prev === "build" ? "plan" : "build"));
     };
+    const agentModeLabel = () => (agentMode() === "build" ? "Build" : "Plan");
+    const agentModeIcon = () => "◆";
+    const agentModeColor = () => (agentMode() === "build" ? "#2f5fd7" : "#2f8f4e");
     const submit = async (text, queuedEntryId) => {
         const trimmed = text.trim();
         if (!trimmed)
@@ -354,6 +358,9 @@ export function App(props) {
         let lastPhaseNote = null;
         let lastLoopEvent = null;
         let fallbackRendered = false;
+        const streamToken = crypto.randomUUID();
+        setActiveStreamToken(streamToken);
+        const isCurrentStream = () => activeStreamToken() === streamToken;
         const formatFailureSummary = (message) => {
             const detail = message.trim() || "未拿到更具体的错误信息。";
             return `问题：\n- ${detail}\n\n已尝试：\n- 已执行本轮推理和必要的工具调用\n- 已根据返回结果继续推进或重试\n\n建议：\n- 调整问题范围后再试一次\n- 如果是外部数据源或网络问题，稍后重试`;
@@ -362,9 +369,7 @@ export function App(props) {
             const trimmed = cleanFinalAnswer(text);
             if (!trimmed)
                 return "";
-            if (trimmed.startsWith("Result:\n") || trimmed.startsWith("问题：\n"))
-                return trimmed;
-            return `Result:\n${trimmed}`;
+            return trimmed;
         };
         const cleanFinalAnswer = (text) => {
             let cleaned = text.trim();
@@ -382,12 +387,16 @@ export function App(props) {
             return deduped.join("\n\n");
         };
         const appendFinalSummary = (text) => {
+            if (!isCurrentStream())
+                return;
             if (finalReplyRendered || !text.trim())
                 return;
             appendEntry({ id: crypto.randomUUID(), role: "assistant", content: text, kind: "summary" });
             finalReplyRendered = true;
         };
         const renderRunSnapshotIfNeeded = (run) => {
+            if (!isCurrentStream())
+                return;
             if (fallbackRendered)
                 return;
             const steps = run.plan?.steps ?? [];
@@ -403,9 +412,16 @@ export function App(props) {
             fallbackRendered = steps.length > 0 || Boolean(reply);
         };
         const appendLoopNote = (eventKey, text) => {
+            if (!isCurrentStream())
+                return;
+            const normalized = text.trim();
+            if (!normalized || normalized === "Thinking:" || normalized === "Thinking:\n") {
+                lastLoopEvent = eventKey;
+                return;
+            }
             if (lastLoopEvent === eventKey)
                 return;
-            if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished")) {
+            if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished") || text.includes("I have enough information to produce the answer")) {
                 lastLoopEvent = eventKey;
                 return;
             }
@@ -413,6 +429,8 @@ export function App(props) {
             lastLoopEvent = eventKey;
         };
         const startConfirmationModal = () => {
+            if (!isCurrentStream())
+                return;
             openConfirmModal(confirmPayload());
         };
         const maybePromptConfirmation = (text) => {
@@ -446,6 +464,8 @@ export function App(props) {
             return "Thinking: working through the next step.";
         };
         const onStreamEvent = (evt) => {
+            if (!isCurrentStream())
+                return;
             debugLog("streamEvent", { event: evt.event, data: evt.data });
             if (evt.event === "run_event") {
                 currentRunID = evt.data.run_id;
@@ -576,8 +596,16 @@ export function App(props) {
         };
         try {
             await replStream(apiUrl(), { session: sessionID(), input: trimmed, mode: agentMode(), attachments: currentAttachments }, onStreamEvent, abortController?.signal);
+            if (!isCurrentStream()) {
+                setBusy(false);
+                return;
+            }
             if (currentRunID) {
                 const run = await getRun(apiUrl(), currentRunID);
+                if (!isCurrentStream()) {
+                    setBusy(false);
+                    return;
+                }
                 if (!assistantReplyText.trim() && (run.plan?.steps?.length || run.results?.length || run.reply)) {
                     renderRunSnapshotIfNeeded(run);
                 }
@@ -603,6 +631,8 @@ export function App(props) {
                         // ignore cancel failures
                     }
                 }
+                if (isCurrentStream())
+                    setActiveStreamToken(null);
                 setBusy(false);
                 return;
             }
@@ -610,6 +640,10 @@ export function App(props) {
                 // Fallback to non-streaming endpoint.
                 try {
                     const response = await client().repl({ session: sessionID(), input: trimmed, mode: agentMode(), attachments: currentAttachments });
+                    if (!isCurrentStream()) {
+                        setBusy(false);
+                        return;
+                    }
                     appendToolEntries(response.plan?.steps ?? [], response.results ?? []);
                     if (response.reply) {
                         assistantReplyText = response.reply;
@@ -638,6 +672,8 @@ export function App(props) {
             }
         }
         if (abortController?.signal.aborted) {
+            if (isCurrentStream())
+                setActiveStreamToken(null);
             setBusy(false);
             return;
         }
@@ -648,6 +684,8 @@ export function App(props) {
         else if (finalErrorText && !finalReplyRendered) {
             appendFinalSummary(formatFailureSummary(finalErrorText));
         }
+        if (isCurrentStream())
+            setActiveStreamToken(null);
         setBusy(false);
         if (inputQueue.length > 0 && !isProcessingQueue) {
             isProcessingQueue = true;
@@ -1692,7 +1730,7 @@ export function App(props) {
                         error: theme.error,
                         thinking: theme.thinking,
                     });
-                    const maxLines = 4;
+                    const maxLines = 12;
                     const expanded = isToolExpanded(entry.id);
                     const visible = expanded ? lines : lines.slice(0, maxLines);
                     const hiddenCount = lines.length - visible.length;
@@ -1763,7 +1801,7 @@ export function App(props) {
         </box>)}
       <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
         <box flexDirection="row" paddingBottom={2}>
-          <text fg={theme.primary}>{agentMode() === "build" ? "🔨" : "📋"} {agentMode()}</text>
+          <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
           {currentModel() && <text fg={theme.muted}> · {currentModel()}</text>}
           {activeRunBanner() && <text fg={theme.file}> · {activeRunBanner()}</text>}
           <box flexGrow={1}/>

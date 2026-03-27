@@ -83,7 +83,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 		route = routeLightweight
 	}
 	if cb.onRunEvent != nil && shouldEmitThinking(route) {
-		cb.onRunEvent("thinking_started", map[string]any{"message": "Starting the task and checking context."})
+		cb.onRunEvent("thinking_started", map[string]any{"message": ""})
 	}
 
 	mode = normalizeAgentMode(mode)
@@ -123,6 +123,8 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	planReq := sdk.PlanRequest{ConversationID: sessionID, Prompt: normalized.Text, Intent: "agent"}
 	retries := 0
 	freshInfoRetried := false
+	freshInfoFetches := 0
+	freshInfoSuccessfulFetches := 0
 	if format != nil && format.Type == "json_schema" {
 		if format.RetryCount > 0 {
 			retries = format.RetryCount
@@ -284,6 +286,12 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 				result.Error = execErr.Error()
 			}
 			result.Data = rt.truncateToolResult(ctx, sessionID, planStep.Tool, result.Data)
+			if route == routeFreshInfo && toolName == "web.fetch" {
+				freshInfoFetches++
+				if result.Success {
+					freshInfoSuccessfulFetches++
+				}
+			}
 			results = append(results, result)
 			run.Results = results
 			if result.Success {
@@ -347,6 +355,13 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 					freshInfoRetried = true
 				}
 				baseMessages = append(baseMessages, map[string]any{"role": "system", "content": recoveryPrompt})
+			} else if route == routeFreshInfo && toolName == "web.fetch" && result.Success {
+				switch {
+				case freshInfoSuccessfulFetches >= 2:
+					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You now have enough fresh evidence from multiple successful web.fetch calls. Stop fetching and answer the user's question directly in one concise reply, citing the fetched source names or URLs briefly."})
+				case freshInfoFetches >= 3:
+					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You already have a successful web.fetch result and have tried several sources. Stop browsing and answer directly using the best fetched evidence you have."})
+				}
 			}
 
 			rt.checkAndCompress(ctx, sessionID)
