@@ -114,8 +114,9 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	if summary, ok := rt.maybeCoordinate(ctx, sessionID, normalized.Text); ok {
 		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": summary})
 	}
-	if initialTodos := planTodosFromInput(normalized.Text); len(initialTodos) > 0 {
+	if initialTodos := rt.planTodosFromInput(ctx, sessionID, normalized.Text); len(initialTodos) > 0 {
 		rt.updateRunTodos(run, initialTodos, cb.emit)
+		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "For this task, use the todo.write tool to keep the todo list current whenever scope changes or steps complete."})
 		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": renderTodoSystemPrompt(initialTodos)})
 	}
 	run.Messages = cloneMessages(baseMessages)
@@ -186,6 +187,15 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			run.Results = results
 			rt.finalizeRun(run, cb.emit, "run_failed", map[string]any{"error": err.Error()})
 			return Response{Plan: plan, Results: results, Reply: ""}, err
+		}
+
+		if len(run.Todos) == 0 && shouldCreateTodos(normalized.Text) && step == 0 {
+			baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "This is a complex task. Before any other meaningful work, you must call todo.write to create a concrete todo list. Do not proceed with file edits, shell commands, or other tool calls until todo.write has been used."})
+			continue
+		}
+		if len(run.Todos) > 0 && len(resp.ToolCalls) > 0 && !containsTodoWriteCall(nameMap, resp.ToolCalls) && !hasCompletedTodo(run.Todos) && step == 0 {
+			baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You started a complex task without updating todos. Call todo.write now to establish or confirm the working todo list, then continue."})
+			continue
 		}
 
 		if format != nil && format.Type == "json_schema" {
@@ -264,6 +274,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			if cb.onRunEvent != nil {
 				cb.onRunEvent("tool_execution_started", map[string]any{"tool": toolName, "call_id": call.ID, "timeout_ms": run.ToolTimeout.Milliseconds()})
 			}
+			markTodoInProgress(rt, run, toolName, cb.emit)
 			stepID := uuid.NewString()
 			planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: call.Arguments, Status: sdk.StepStatusRunning}
 			toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)

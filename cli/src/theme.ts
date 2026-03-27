@@ -14,4 +14,10 @@ export const theme = {
   thinking: "#555d6b",
   system: "#f0c96a",
   summary: "#9fe3b1",
+  todoPending: "#7f8c99",
+  todoActive: "#8bd5ff",
+  todoDone: "#98fb98",
+  todoFailed: "#ff7b72",
+  todoCancelled: "#8b7d6b",
+  todoPanel: "#0b1117",
 }

@@ -138,8 +138,10 @@ export function App(props: AppProps) {
   const [isTyping, setIsTyping] = createSignal(false)
   const [serverMetrics, setServerMetrics] = createSignal<MetricsResponse | null>(null)
   const [currentModel, setCurrentModel] = createSignal<string>("")
+  const [todoPulse, setTodoPulse] = createSignal(false)
   let monitorInterval: ReturnType<typeof setInterval> | undefined
   let metricsInterval: ReturnType<typeof setInterval> | undefined
+  let todoPulseInterval: ReturnType<typeof setInterval> | undefined
   let abortController: AbortController | undefined
   let escapeTimeoutRef: ReturnType<typeof setTimeout> | undefined
   let inputQueue: { text: string; entryId: string }[] = []
@@ -188,11 +190,6 @@ export function App(props: AppProps) {
   createEffect(() => {
     queuedRequests()
     syncQueuedConversationEntry()
-  })
-
-  createEffect(() => {
-    activeTodos()
-    syncTodoEntry(activeTodos())
   })
 
   const debugEnabled = () => props.debugStream === true
@@ -338,23 +335,20 @@ export function App(props: AppProps) {
 
   const formatTodoBlock = (todos: TodoItem[]) => {
     if (todos.length === 0) return ""
-    return `# Todos\n\n${todos.map((todo) => {
-      const mark = todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? "[•]" : todo.status === "cancelled" ? "[-]" : "[ ]"
-      return `${mark} ${todo.content}`
+    return `${todos.map((todo) => {
+      const mark = todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? "[•]" : todo.status === "failed" ? "[!]" : todo.status === "cancelled" ? "[-]" : "[ ]"
+      const suffix = todo.tool ? ` (${todo.tool})` : ""
+      const note = todo.note ? ` - ${todo.note}` : ""
+      return `${mark} ${todo.content}${suffix}${note}`
     }).join("\n")}`
   }
 
-  const syncTodoEntry = (todos: TodoItem[]) => {
-    const entryID = "__active_todos__"
-    if (todos.length === 0) {
-      setEntries((prev) => prev.filter((entry) => entry.id !== entryID))
-      return
-    }
-    const content = formatTodoBlock(todos)
-    setEntries((prev) => {
-      const without = prev.filter((entry) => entry.id !== entryID)
-      return [...without, { id: entryID, role: "todo", content }]
-    })
+  const todoLineColor = (todo: TodoItem, pulse: boolean) => {
+    if (todo.status === "completed") return theme.todoDone
+    if (todo.status === "failed") return theme.todoFailed
+    if (todo.status === "cancelled") return theme.todoCancelled
+    if (todo.status === "in_progress") return pulse ? theme.primary : theme.todoActive
+    return theme.todoPending
   }
 
   const isConfirmationPrompt = (reply: string) => {
@@ -624,11 +618,15 @@ export function App(props: AppProps) {
           return
         }
         if (runType === "tool_execution_started") {
-          setActiveRunBanner("Executing tool...")
+          const tool = String((evt.data.data ?? {})["tool"] ?? "tool")
+          setActiveRunBanner(`Executing ${tool}...`)
           return
         }
         if (runType === "tool_execution_finished") {
-          setActiveRunBanner("Processing response...")
+          const data = (evt.data.data ?? {}) as Record<string, unknown>
+          const tool = String(data["tool"] ?? "tool")
+          const success = Boolean(data["success"])
+          setActiveRunBanner(success ? `Finished ${tool}` : `${tool} failed`)
           appendLoopNote(`tool-finish:${evt.data.seq}`, "Thinking: tool finished, continuing with the next step.")
           return
         }
@@ -1787,9 +1785,11 @@ export function App(props: AppProps) {
       }
     }
     initMetrics()
+    todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700)
 
     onCleanup(() => {
       if (metricsInterval) clearInterval(metricsInterval)
+      if (todoPulseInterval) clearInterval(todoPulseInterval)
     })
   })
 
@@ -1801,6 +1801,8 @@ export function App(props: AppProps) {
   const width = createMemo(() => terminal().width)
   const height = createMemo(() => terminal().height)
   const contentHeight = createMemo(() => Math.max(5, height() - 6))
+  const todoPanelWidth = createMemo(() => activeTodos().length > 0 ? Math.min(42, Math.max(28, Math.floor(width() * 0.28))) : 0)
+  const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth()))
 
   return (
     <box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
@@ -1815,14 +1817,16 @@ export function App(props: AppProps) {
         <box paddingLeft={2} />
         <text fg={theme.muted}>$ {serverMetrics()?.cost?.toFixed(4) ?? "0.0000"}</text>
       </box>
-      <scrollbox
-        ref={(val: ScrollBoxRenderable) => (scroll = val)}
-        height={contentHeight()}
-        paddingLeft={2}
-        paddingRight={2}
-        paddingTop={1}
-      >
-        <For each={entries()}>
+      <box flexDirection="row" height={contentHeight()}>
+        <scrollbox
+          ref={(val: ScrollBoxRenderable) => (scroll = val)}
+          width={mainPanelWidth()}
+          height={contentHeight()}
+          paddingLeft={2}
+          paddingRight={2}
+          paddingTop={1}
+        >
+          <For each={entries()}>
           {(entry) => (
             <box flexDirection="column" paddingBottom={1}>
               {(entry.role === "tool" || entry.role === "error") && entry.title && (
@@ -1921,29 +1925,33 @@ export function App(props: AppProps) {
                     {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
                   </For>
                 </box>
-              ) : entry.role === "todo" ? (
-                <box flexDirection="column">
-                  <For each={renderMarkdownLines(entry.content ?? "", {
-                    text: theme.text,
-                    muted: theme.muted,
-                    code: theme.primary,
-                    success: theme.success,
-                    output: theme.muted,
-                    file: theme.file,
-                    accent: theme.primary,
-                    error: theme.error,
-                    thinking: theme.thinking,
-                  })}>
-                    {(line) => <text fg={line.fg ?? theme.text} attributes={line.attributes}>{line.text}</text>}
-                  </For>
-                </box>
               ) : (
                 <text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>
               )}
             </box>
           )}
-        </For>
-      </scrollbox>
+          </For>
+        </scrollbox>
+        {activeTodos().length > 0 && (
+          <box width={todoPanelWidth()} height={contentHeight()} flexDirection="column" paddingLeft={1} paddingRight={2} paddingTop={1} backgroundColor={theme.todoPanel}>
+            <text fg={theme.primary} attributes={TextAttributes.BOLD}># Todos</text>
+            <box paddingBottom={1} />
+            <For each={activeTodos()}>
+              {(todo) => {
+                const note = () => todo.note ? `  ${todo.note}` : todo.status === "failed" ? "  Retry or update with todo.write" : ""
+                return (
+                  <box flexDirection="column" paddingBottom={1}>
+                    <text fg={todoLineColor(todo, todoPulse())} attributes={todo.active ? TextAttributes.BOLD : TextAttributes.NONE}>
+                      {`${todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? (todoPulse() ? "[•]" : "[>]" ) : todo.status === "failed" ? "[!]" : todo.status === "cancelled" ? "[-]" : "[ ]"} ${todo.content}${todo.tool ? ` (${todo.tool})` : ""}`}
+                    </text>
+                    {note() && <text fg={todo.status === "failed" ? theme.todoFailed : theme.muted}>{note()}</text>}
+                  </box>
+                )
+              }}
+            </For>
+          </box>
+        )}
+      </box>
       {modal() && (
         <box width={width()} height={height()} justifyContent="center" alignItems="center">
           <box

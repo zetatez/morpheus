@@ -74,6 +74,8 @@ type RunTodo struct {
 	Status   string `json:"status"`
 	Priority string `json:"priority,omitempty"`
 	Active   bool   `json:"active,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Note     string `json:"note,omitempty"`
 }
 
 type runStore struct {
@@ -318,6 +320,8 @@ func exportRunTodos(todos []RunTodo) []map[string]any {
 			"status":   todo.Status,
 			"priority": todo.Priority,
 			"active":   todo.Active,
+			"tool":     todo.Tool,
+			"note":     todo.Note,
 		})
 	}
 	return out
@@ -345,7 +349,7 @@ func normalizeTodos(raw []map[string]any) []RunTodo {
 		status := normalizeTodoStatus(stringValue(item["status"]))
 		priority := normalizeTodoPriority(stringValue(item["priority"]))
 		active, _ := item["active"].(bool)
-		out = append(out, RunTodo{ID: id, Content: content, Status: status, Priority: priority, Active: active})
+		out = append(out, RunTodo{ID: id, Content: content, Status: status, Priority: priority, Active: active, Tool: stringValue(item["tool"]), Note: stringValue(item["note"])})
 	}
 	return out
 }
@@ -356,6 +360,8 @@ func normalizeTodoStatus(status string) string {
 		return "completed"
 	case "in_progress":
 		return "in_progress"
+	case "failed":
+		return "failed"
 	case "cancelled":
 		return "cancelled"
 	default:

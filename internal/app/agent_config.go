@@ -28,7 +28,7 @@ func (r *AgentRegistry) mergeDefaults() {
 	}
 	r.tools["implementer"] = []string{
 		"fs.read", "fs.write", "fs.edit", "fs.glob", "fs.grep",
-		"cmd.exec", "git.*", "conversation.echo", "mcp.*",
+		"cmd.exec", "git.*", "conversation.echo", "mcp.*", "todo.write",
 	}
 	r.tools["explorer"] = []string{
 		"fs.read", "fs.glob", "fs.grep", "lsp.query", "conversation.echo",
@@ -40,13 +40,13 @@ func (r *AgentRegistry) mergeDefaults() {
 		"fs.read", "fs.glob", "fs.grep", "lsp.query", "conversation.echo",
 	}
 	r.tools["tester"] = []string{
-		"fs.read", "fs.glob", "fs.grep", "cmd.exec", "git.*", "conversation.echo",
+		"fs.read", "fs.glob", "fs.grep", "cmd.exec", "git.*", "conversation.echo", "todo.write",
 	}
 	r.tools["devops"] = []string{
-		"fs.read", "fs.write", "fs.glob", "fs.grep", "cmd.exec", "git.*", "conversation.echo",
+		"fs.read", "fs.write", "fs.glob", "fs.grep", "cmd.exec", "git.*", "conversation.echo", "todo.write",
 	}
 	r.tools["data"] = []string{
-		"fs.read", "fs.write", "fs.glob", "fs.grep", "cmd.exec", "conversation.echo",
+		"fs.read", "fs.write", "fs.glob", "fs.grep", "cmd.exec", "conversation.echo", "todo.write",
 	}
 	r.tools["security"] = []string{
 		"fs.read", "fs.glob", "fs.grep", "cmd.exec", "git.*", "conversation.echo",
@@ -56,7 +56,7 @@ func (r *AgentRegistry) mergeDefaults() {
 	}
 	r.tools["shell-python-operator"] = []string{
 		"fs.read", "fs.write", "fs.edit", "fs.glob", "fs.grep",
-		"cmd.exec", "git.*", "conversation.echo", "mcp.*",
+		"cmd.exec", "git.*", "conversation.echo", "mcp.*", "todo.write",
 	}
 }
 

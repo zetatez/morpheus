@@ -100,6 +100,7 @@ func IsToolAllowed(mode, tool string) bool {
 			"fs.glob":          {},
 			"fs.grep":          {},
 			"lsp.query":        {},
+			"todo.write":       {},
 			"web.fetch":        {},
 			"respond.echo":     {},
 			"conversation.ask": {},
@@ -151,6 +152,12 @@ func (o *Orchestrator) ExecuteStep(ctx context.Context, sessionID string, step s
 	}
 	inputs := step.Inputs
 	if step.Tool == "skill.invoke" {
+		if inputs == nil {
+			inputs = map[string]any{}
+		}
+		inputs["session_id"] = sessionID
+	}
+	if step.Tool == "todo.write" {
 		if inputs == nil {
 			inputs = map[string]any{}
 		}

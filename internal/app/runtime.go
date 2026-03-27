@@ -43,6 +43,7 @@ import (
 	"github.com/zetatez/morpheus/internal/tools/registry"
 	respondtool "github.com/zetatez/morpheus/internal/tools/respond"
 	"github.com/zetatez/morpheus/internal/tools/skilltool"
+	"github.com/zetatez/morpheus/internal/tools/todotool"
 	"github.com/zetatez/morpheus/internal/tools/webfetch"
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
@@ -238,6 +239,11 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 			*skillInvoke = *skilltool.New(skills, rt.ensureSkillAllowed)
 		}
 	}
+	if tool, ok := reg.Get("todo.write"); ok {
+		if todoWrite, ok := tool.(*todotool.Tool); ok {
+			*todoWrite = *todotool.New(rt)
+		}
+	}
 	if tool, ok := reg.Get("lsp.query"); ok {
 		if lspTool, ok := tool.(*lsp.Tool); ok {
 			lsp.RegisterHooks(plugins, lspTool)
@@ -252,6 +258,7 @@ func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mc
 		rtAgent,
 		agenttool.NewCoordinator(nil),
 		ask.NewQuestionTool(),
+		todotool.New(nil),
 		fstool.NewReadTool(cfg.WorkspaceRoot),
 		fstool.NewWriteTool(cfg.WorkspaceRoot, cfg.Permissions.FileSystem.MaxWriteSizeKB),
 		fstool.NewEditTool(cfg.WorkspaceRoot, cfg.Permissions.FileSystem.MaxWriteSizeKB),

@@ -31,6 +31,8 @@ export type TodoItem = {
   status: string
   priority?: string
   active?: boolean
+  tool?: string
+  note?: string
 }
 
 export type ConfirmationDecision = {

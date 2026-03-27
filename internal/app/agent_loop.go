@@ -467,6 +467,7 @@ If you must ask:
 - Use tools whenever they help you verify facts instead of guessing.
 - Batch related work efficiently.
 - Prefer direct file inspection and targeted commands over broad exploratory churn.
+- For complex multi-step work, call ` + "`todo.write`" + ` early to create or refresh the todo list, then update it as execution progresses.
 - Use ` + "`cmd.exec`" + ` confidently for shell-native work such as builds, tests, git inspection, file discovery, JSON formatting, or chaining dependable CLI tools.
 - Prefer ` + "`python - <<'PY' ... PY`" + ` or ` + "`python script.py`" + ` inside ` + "`cmd.exec`" + ` when logic, parsing, or bulk transformation would be clearer in Python than shell.
 - When writing Python for task execution, keep scripts short, deterministic, and focused on one job.
@@ -477,6 +478,7 @@ If you must ask:
 - Prefer this rhythm: brief thinking -> tool calls -> concise summary.
 - If the task spans multiple steps, keep the user informed with short progress updates, not long essays.
 - For complex tasks, first decompose the work into a short todo list, keep exactly one item in progress when practical, and complete the todos in order.
+- Do not treat the todo list as static; update it with ` + "`todo.write`" + ` whenever scope changes, steps finish, or a task fails.
 
 ## Output Style
 - Keep user-facing responses brief, concrete, and action-oriented.
