@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type RunState struct {
 	Confirmation       *ConfirmationPayload
 	Plan               sdk.Plan
 	Results            []sdk.ToolResult
+	Todos              []RunTodo
 	LastStep           string
 	Messages           []map[string]any
 	Events             []RunEvent
@@ -64,6 +66,14 @@ type RunState struct {
 	LastEventSeqServed int64
 	Subscribers        map[chan RunEvent]struct{}
 	mu                 sync.Mutex
+}
+
+type RunTodo struct {
+	ID       string `json:"id"`
+	Content  string `json:"content"`
+	Status   string `json:"status"`
+	Priority string `json:"priority,omitempty"`
+	Active   bool   `json:"active,omitempty"`
 }
 
 type runStore struct {
@@ -174,6 +184,7 @@ func (r *RunState) snapshotResponse() Response {
 		Results:      r.Results,
 		Reply:        r.Reply,
 		Confirmation: r.Confirmation,
+		Todos:        exportRunTodos(r.Todos),
 	}
 }
 
@@ -284,6 +295,7 @@ func (rt *Runtime) runFinalEvent(run *RunState, emit replEmitter) {
 	data := map[string]any{
 		"status": statusString(run.Status),
 		"reply":  run.Reply,
+		"todos":  exportRunTodos(run.Todos),
 	}
 	if run.Err != "" {
 		data["error"] = run.Err
@@ -292,6 +304,91 @@ func (rt *Runtime) runFinalEvent(run *RunState, emit replEmitter) {
 		data["confirmation"] = run.Confirmation
 	}
 	_ = rt.emitRunEvent(run, emit, "run_finished", data)
+}
+
+func exportRunTodos(todos []RunTodo) []map[string]any {
+	if len(todos) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(todos))
+	for _, todo := range todos {
+		out = append(out, map[string]any{
+			"id":       todo.ID,
+			"content":  todo.Content,
+			"status":   todo.Status,
+			"priority": todo.Priority,
+			"active":   todo.Active,
+		})
+	}
+	return out
+}
+
+func normalizeTodos(raw []map[string]any) []RunTodo {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]RunTodo, 0, len(raw))
+	seen := map[string]struct{}{}
+	for i, item := range raw {
+		content := strings.TrimSpace(stringValue(item["content"]))
+		if content == "" {
+			continue
+		}
+		id := strings.TrimSpace(stringValue(item["id"]))
+		if id == "" {
+			id = fmt.Sprintf("todo-%d", i+1)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		status := normalizeTodoStatus(stringValue(item["status"]))
+		priority := normalizeTodoPriority(stringValue(item["priority"]))
+		active, _ := item["active"].(bool)
+		out = append(out, RunTodo{ID: id, Content: content, Status: status, Priority: priority, Active: active})
+	}
+	return out
+}
+
+func normalizeTodoStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		return "completed"
+	case "in_progress":
+		return "in_progress"
+	case "cancelled":
+		return "cancelled"
+	default:
+		return "pending"
+	}
+}
+
+func normalizeTodoPriority(priority string) string {
+	switch strings.ToLower(strings.TrimSpace(priority)) {
+	case "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(priority))
+	default:
+		return "medium"
+	}
+}
+
+func stringValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func (rt *Runtime) updateRunTodos(run *RunState, todos []RunTodo, emit replEmitter) {
+	if run == nil {
+		return
+	}
+	next := append([]RunTodo(nil), todos...)
+	sort.SliceStable(next, func(i, j int) bool { return next[i].ID < next[j].ID })
+	run.mu.Lock()
+	run.Todos = next
+	run.mu.Unlock()
+	_ = rt.emitRunEvent(run, emit, "todos_updated", map[string]any{"todos": exportRunTodos(next)})
 }
 
 func statusString(status RunStatus) string { return string(status) }

@@ -330,6 +330,7 @@ func agenttoolDefaultProfiles() map[string]agenttool.AgentProfile {
 			Description: "Deliver concrete code changes efficiently.",
 			Instructions: "Focus on actionable implementation steps. " +
 				"Call out files, edits, and tests needed to finish the task. " +
+				"Prefer shell commands for verification and automation, and use short Python scripts when they are the clearest way to handle complex transformations. " +
 				"Be concise and avoid speculation.",
 		},
 		"explorer": {
@@ -337,6 +338,7 @@ func agenttoolDefaultProfiles() map[string]agenttool.AgentProfile {
 			Description: "Investigate codebase details and surface key context.",
 			Instructions: "Locate relevant files, APIs, and behaviors. " +
 				"Summarize findings and point to exact paths or modules. " +
+				"Use shell-based inspection when it is faster, and use Python for structured analysis if needed. " +
 				"Avoid making changes.",
 		},
 		"reviewer": {
@@ -355,19 +357,22 @@ func agenttoolDefaultProfiles() map[string]agenttool.AgentProfile {
 			Name:        "Tester",
 			Description: "Write and verify tests for code changes.",
 			Instructions: "Identify relevant test files, write unit tests and integration tests. " +
-				"Ensure test coverage for new functionality. Run tests and report results.",
+				"Ensure test coverage for new functionality. Run tests and report results. " +
+				"Prefer shell commands and lightweight scripts to automate verification.",
 		},
 		"devops": {
 			Name:        "DevOps",
 			Description: "Handle deployment, CI/CD, and infrastructure tasks.",
 			Instructions: "Focus on deployment scripts, Dockerfiles, CI/CD pipelines, " +
-				"infrastructure as code, and environment configuration.",
+				"infrastructure as code, and environment configuration. " +
+				"Default to robust shell workflows and use Python when orchestration or parsing becomes complex.",
 		},
 		"data": {
 			Name:        "Data Engineer",
 			Description: "Handle data pipelines, queries, and transformations.",
 			Instructions: "Work with databases, SQL queries, data transformations, " +
-				"ETL pipelines, and data modeling. Suggest optimizations.",
+				"ETL pipelines, and data modeling. Suggest optimizations. " +
+				"Prefer Python for structured data processing and shell for repeatable pipeline execution.",
 		},
 		"security": {
 			Name:        "Security Engineer",
@@ -381,7 +386,14 @@ func agenttoolDefaultProfiles() map[string]agenttool.AgentProfile {
 			Instructions: "Write clear documentation, API docs, README updates, " +
 				"and code comments. Focus on clarity and completeness.",
 		},
+		"shell-python-operator": {
+			Name:        "Shell-Python Operator",
+			Description: "Solve complex automation tasks with shell workflows and Python scripts.",
+			Instructions: "Prefer robust shell pipelines for inspection, orchestration, build, test, and environment work. " +
+				"Use short Python scripts for structured parsing, batch edits, data transformation, JSON processing, and repeatable automation. " +
+				"Optimize for reliability, observability, and rerunnable execution. Report commands, scripts, outputs, and verification clearly.",
+		},
 	}
 }
 
-const coordinatorSystemPrompt = "You are a coordinator subagent. Decompose the user request into up to 6 specialized tasks, assign each to a role (implementer, explorer, reviewer, architect, tester, devops, data, security, docs), and return ONLY valid JSON. Schema: {\"summary\": string, \"tasks\": [{\"id\": string, \"role\": string, \"prompt\": string, \"depends_on\": [string]}]}. Keep prompts concise and actionable."
+const coordinatorSystemPrompt = "You are a coordinator subagent. Decompose the user request into up to 6 specialized tasks, assign each to a role (implementer, explorer, reviewer, architect, tester, devops, data, security, docs, shell-python-operator), and return ONLY valid JSON. Schema: {\"summary\": string, \"tasks\": [{\"id\": string, \"role\": string, \"prompt\": string, \"depends_on\": [string]}]}. Keep prompts concise and actionable. Prefer shell-python-operator for complex automation, command-heavy workflows, structured parsing, or short Python-script execution."

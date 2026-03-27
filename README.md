@@ -5,8 +5,10 @@ Morpheus is a local AI agent runtime with tool execution, session persistence, M
 ## Features
 
 - **AI Agent Runtime**: Iterative agent execution with tool calling
+- **Shell/Python Task Execution**: Strong bias toward solving complex tasks with shell commands and short Python automation
 - **Multi-Agent Coordination**: Built-in coordinator with parallel task execution
 - **Subagents**: Built-in roles for coordination (implementer, explorer, reviewer, architect)
+- **Automation Specialist**: Dedicated `shell-python-operator` subagent for command-heavy and script-heavy tasks
 - **Tool Ecosystem**: File operations, command execution, LSP, Git, web fetch
 - **MCP Protocol**: Full MCP client support (stdio/HTTP/SSE transports)
 - **Session Persistence**: SQLite + file storage with smart context compression
@@ -136,6 +138,7 @@ Morpheus automatically coordinates multiple specialized subagents (up to 9) for 
 | `data` | Works with data pipelines |
 | `security` | Reviews security vulnerabilities |
 | `docs` | Creates documentation |
+| `shell-python-operator` | Handles shell pipelines, automation, and short Python scripts |
 
 **DAG Scheduling**: Tasks can have dependencies (`depends_on`). Morpheus automatically performs topological sort and executes tasks in the correct order.
 

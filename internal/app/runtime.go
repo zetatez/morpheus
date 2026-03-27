@@ -125,6 +125,7 @@ type Response struct {
 	Results      []sdk.ToolResult     `json:"results"`
 	Reply        string               `json:"reply"`
 	Confirmation *ConfirmationPayload `json:"confirmation,omitempty"`
+	Todos        []map[string]any     `json:"todos,omitempty"`
 }
 
 // NewRuntime statically wires the baseline BruteCode stack.

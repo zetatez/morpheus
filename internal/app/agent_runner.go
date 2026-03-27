@@ -114,6 +114,10 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	if summary, ok := rt.maybeCoordinate(ctx, sessionID, normalized.Text); ok {
 		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": summary})
 	}
+	if initialTodos := planTodosFromInput(normalized.Text); len(initialTodos) > 0 {
+		rt.updateRunTodos(run, initialTodos, cb.emit)
+		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": renderTodoSystemPrompt(initialTodos)})
+	}
 	run.Messages = cloneMessages(baseMessages)
 	run.Status = RunStatusRunning
 	rt.logger.Info("runAgentLoopWithRun entering loop", zap.String("run_id", run.ID), zap.Int("message_count", len(baseMessages)))
@@ -214,6 +218,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			advanceTodosFromResponse(rt, run, resp.Content, cb.emit)
 			if route == routeFreshInfo && !freshInfoRetried {
 				baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "This is a fresh-information request. You must call web.fetch before answering. Try a public source now and then summarize briefly."})
 				freshInfoRetried = true
@@ -299,6 +304,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			} else {
 				planStep.Status = sdk.StepStatusFailed
 			}
+			advanceTodosFromTool(rt, run, toolName, result.Success, cb.emit)
 			plan.Steps = append(plan.Steps, planStep)
 			if cb.onToolResult != nil {
 				cb.onToolResult(toolName, call.ID, planStep, result)

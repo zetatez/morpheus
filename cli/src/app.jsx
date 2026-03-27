@@ -79,6 +79,7 @@ export function App(props) {
     const [monitorActive, setMonitorActive] = createSignal(false);
     const [attachments, setAttachments] = createSignal([]);
     const [escapePressed, setEscapePressed] = createSignal(false);
+    const [isTyping, setIsTyping] = createSignal(false);
     const [serverMetrics, setServerMetrics] = createSignal(null);
     const [currentModel, setCurrentModel] = createSignal("");
     let monitorInterval;
@@ -254,7 +255,7 @@ export function App(props) {
             return [...withoutQueue, entry, prev[queueIndex]];
         });
         queueMicrotask(() => {
-            if (scroll)
+            if (scroll && !isTyping())
                 scroll.scrollBy(100000);
             renderer.requestRender();
         });
@@ -1717,7 +1718,7 @@ export function App(props) {
     });
     createEffect(() => {
         entries();
-        if (scroll)
+        if (scroll && !isTyping())
             scroll.scrollBy(100000);
     });
     const width = createMemo(() => terminal().width);
@@ -1882,6 +1883,7 @@ export function App(props) {
         <textarea ref={(val) => (textarea = val)} height={3} focused={!modal()} textColor={theme.text} focusedTextColor={theme.text} cursorColor={theme.primary} onContentChange={() => {
             if (suppressHistoryChange)
                 return;
+            setIsTyping(Boolean((textarea?.plainText ?? "").length));
             setInput(textarea?.plainText ?? "");
             if (historyIndex() !== null) {
                 setHistoryIndex(null);
@@ -1897,6 +1899,7 @@ export function App(props) {
             { name: "linefeed", action: "submit" },
             { name: "linefeed", shift: true, action: "newline" },
         ]} onSubmit={() => {
+            setIsTyping(false);
             const value = textarea?.plainText ?? input();
             submit(value);
         }} onPaste={(evt) => {

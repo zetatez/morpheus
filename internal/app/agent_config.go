@@ -54,6 +54,10 @@ func (r *AgentRegistry) mergeDefaults() {
 	r.tools["docs"] = []string{
 		"fs.read", "fs.write", "fs.glob", "fs.grep", "conversation.echo",
 	}
+	r.tools["shell-python-operator"] = []string{
+		"fs.read", "fs.write", "fs.edit", "fs.glob", "fs.grep",
+		"cmd.exec", "git.*", "conversation.echo", "mcp.*",
+	}
 }
 
 func (r *AgentRegistry) loadCustom(agents []config.AgentDefinition) {

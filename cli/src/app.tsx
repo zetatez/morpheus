@@ -20,6 +20,7 @@ import {
   type ApiResponse,
   type ConfirmationPayload,
   type StreamEvent,
+  type TodoItem,
   type ToolResult,
   type PlanStep,
   type SessionInfo,
@@ -116,6 +117,7 @@ export function App(props: AppProps) {
   const [runsNextCursor, setRunsNextCursor] = createSignal<string | null>(null)
   const [runsStatusFilter, setRunsStatusFilter] = createSignal("")
   const [activeRunBanner, setActiveRunBanner] = createSignal<string | null>(null)
+  const [activeTodos, setActiveTodos] = createSignal<TodoItem[]>([])
   const [activeStreamToken, setActiveStreamToken] = createSignal<string | null>(null)
   const [runTimeline, setRunTimeline] = createSignal<string | null>(null)
   const [runTimelineID, setRunTimelineID] = createSignal<string | null>(null)
@@ -133,6 +135,7 @@ export function App(props: AppProps) {
   const [monitorActive, setMonitorActive] = createSignal(false)
   const [attachments, setAttachments] = createSignal<AttachmentInput[]>([])
   const [escapePressed, setEscapePressed] = createSignal(false)
+  const [isTyping, setIsTyping] = createSignal(false)
   const [serverMetrics, setServerMetrics] = createSignal<MetricsResponse | null>(null)
   const [currentModel, setCurrentModel] = createSignal<string>("")
   let monitorInterval: ReturnType<typeof setInterval> | undefined
@@ -185,6 +188,11 @@ export function App(props: AppProps) {
   createEffect(() => {
     queuedRequests()
     syncQueuedConversationEntry()
+  })
+
+  createEffect(() => {
+    activeTodos()
+    syncTodoEntry(activeTodos())
   })
 
   const debugEnabled = () => props.debugStream === true
@@ -312,7 +320,7 @@ export function App(props: AppProps) {
       return [...withoutQueue, entry, prev[queueIndex]]
     })
     queueMicrotask(() => {
-      if (scroll) scroll.scrollBy(100000)
+      if (scroll && !isTyping()) scroll.scrollBy(100000)
       renderer.requestRender()
     })
   }
@@ -326,6 +334,27 @@ export function App(props: AppProps) {
   const updateEntry = (id: string, updater: (entry: Entry) => Entry) => {
     setEntries((prev) => prev.map((e) => (e.id === id ? updater(e) : e)))
     queueMicrotask(() => renderer.requestRender())
+  }
+
+  const formatTodoBlock = (todos: TodoItem[]) => {
+    if (todos.length === 0) return ""
+    return `# Todos\n\n${todos.map((todo) => {
+      const mark = todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? "[•]" : todo.status === "cancelled" ? "[-]" : "[ ]"
+      return `${mark} ${todo.content}`
+    }).join("\n")}`
+  }
+
+  const syncTodoEntry = (todos: TodoItem[]) => {
+    const entryID = "__active_todos__"
+    if (todos.length === 0) {
+      setEntries((prev) => prev.filter((entry) => entry.id !== entryID))
+      return
+    }
+    const content = formatTodoBlock(todos)
+    setEntries((prev) => {
+      const without = prev.filter((entry) => entry.id !== entryID)
+      return [...without, { id: entryID, role: "todo", content }]
+    })
   }
 
   const isConfirmationPrompt = (reply: string) => {
@@ -605,6 +634,11 @@ export function App(props: AppProps) {
         }
         if (runType === "run_started") {
           setActiveRunBanner("Run started")
+          return
+        }
+        if (runType === "todos_updated") {
+          const todos = Array.isArray((evt.data.data ?? {})["todos"]) ? ((evt.data.data ?? {})["todos"] as TodoItem[]) : []
+          setActiveTodos(todos)
           return
         }
         if (runType === "model_turn_finished") {
@@ -1761,7 +1795,7 @@ export function App(props: AppProps) {
 
   createEffect(() => {
     entries()
-    if (scroll) scroll.scrollBy(100000)
+    if (scroll && !isTyping()) scroll.scrollBy(100000)
   })
 
   const width = createMemo(() => terminal().width)
@@ -1887,6 +1921,22 @@ export function App(props: AppProps) {
                     {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
                   </For>
                 </box>
+              ) : entry.role === "todo" ? (
+                <box flexDirection="column">
+                  <For each={renderMarkdownLines(entry.content ?? "", {
+                    text: theme.text,
+                    muted: theme.muted,
+                    code: theme.primary,
+                    success: theme.success,
+                    output: theme.muted,
+                    file: theme.file,
+                    accent: theme.primary,
+                    error: theme.error,
+                    thinking: theme.thinking,
+                  })}>
+                    {(line) => <text fg={line.fg ?? theme.text} attributes={line.attributes}>{line.text}</text>}
+                  </For>
+                </box>
               ) : (
                 <text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>
               )}
@@ -2006,6 +2056,7 @@ export function App(props: AppProps) {
           cursorColor={theme.primary}
           onContentChange={() => {
             if (suppressHistoryChange) return
+            setIsTyping(Boolean((textarea?.plainText ?? "").length))
             setInput(textarea?.plainText ?? "")
             if (historyIndex() !== null) {
               setHistoryIndex(null)
@@ -2023,6 +2074,7 @@ export function App(props: AppProps) {
             { name: "linefeed", shift: true, action: "newline" },
           ]}
           onSubmit={() => {
+            setIsTyping(false)
             const value = textarea?.plainText ?? input()
             submit(value)
           }}

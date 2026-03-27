@@ -22,6 +22,15 @@ export type ApiResponse = {
   results: ToolResult[]
   reply: string
   confirmation?: ConfirmationPayload
+  todos?: TodoItem[]
+}
+
+export type TodoItem = {
+  id: string
+  content: string
+  status: string
+  priority?: string
+  active?: boolean
 }
 
 export type ConfirmationDecision = {
