@@ -57,6 +57,9 @@ func runRepl(ctx context.Context, opts *Options, settings replSettings) error {
 	if settings.apiURL != "" {
 		return runFrontend(ctx, settings, apiURL)
 	}
+	if ok, existingURL := detectExistingServer(ctx, apiURL); ok {
+		return runFrontend(ctx, settings, existingURL)
+	}
 
 	runtime, err := app.NewRuntime(ctx, cfg)
 	if err != nil {
@@ -73,6 +76,18 @@ func runRepl(ctx context.Context, opts *Options, settings replSettings) error {
 	}()
 
 	if err := waitForServer(ctx, apiURL); err != nil {
+		select {
+		case serveErr := <-errCh:
+			if serveErr != nil {
+				if reused, existingURL := recoverFromBindConflict(ctx, apiURL, serveErr); reused {
+					cancel()
+					return runFrontend(ctx, settings, existingURL)
+				}
+				cancel()
+				return serveErr
+			}
+		default:
+		}
 		cancel()
 		return err
 	}
@@ -89,6 +104,36 @@ func runRepl(ctx context.Context, opts *Options, settings replSettings) error {
 	}
 
 	return frontendErr
+}
+
+func detectExistingServer(ctx context.Context, apiURL string) (bool, string) {
+	healthURL := strings.TrimRight(apiURL, "/") + "/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	if err != nil {
+		return false, ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, ""
+	}
+	return true, apiURL
+}
+
+func recoverFromBindConflict(ctx context.Context, apiURL string, serveErr error) (bool, string) {
+	if serveErr == nil {
+		return false, ""
+	}
+	if !strings.Contains(strings.ToLower(serveErr.Error()), "address already in use") {
+		return false, ""
+	}
+	if ok, existingURL := detectExistingServer(ctx, apiURL); ok {
+		return true, existingURL
+	}
+	return false, ""
 }
 
 func runFrontend(ctx context.Context, settings replSettings, apiURL string) error {
