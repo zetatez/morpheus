@@ -73,6 +73,9 @@ func (rt *Runtime) buildMessagesForRoute(sessionID string, route requestRoute) [
 		messages = append(messages, map[string]any{"role": "system", "content": systemPrompt})
 	}
 	if route == routeToolAgent || route == routeFreshInfo {
+		if shared := rt.renderTeamSharedContext(sessionID); shared != "" {
+			messages = append(messages, map[string]any{"role": "system", "content": shared})
+		}
 		for _, doc := range rt.contextDocuments() {
 			messages = append(messages, map[string]any{"role": "system", "content": doc.Label + ":\n" + doc.Content})
 		}

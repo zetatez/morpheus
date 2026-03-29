@@ -191,18 +191,26 @@ func runTasksParallel(ctx context.Context, rt *Runtime, sessionID string, tasks 
 	results := make([]coordinatorResult, len(tasks))
 	var wg sync.WaitGroup
 	limit := make(chan struct{}, 3)
+	team := rt.ensureAgentTeam(sessionID)
+	ctx = withAgentTeam(ctx, team.ID)
+	for _, task := range tasks {
+		rt.registerTeamTask(ctx, sessionID, task)
+	}
 	for i, task := range tasks {
 		wg.Add(1)
 		limit <- struct{}{}
 		go func(idx int, task coordinatorTask) {
 			defer wg.Done()
 			defer func() { <-limit }()
+			memberSessionID := fmt.Sprintf("team-%s-%s", task.Role, task.ID)
+			rt.startTeamTask(ctx, sessionID, task, memberSessionID)
 			profile := rt.getAgentProfile(sessionID, task.Role)
-			summary, err := rt.RunSubAgentWithProfile(ctx, profile, task.Prompt)
+			summary, err := rt.RunSubAgentWithProfile(ctx, profile, buildTeamSubagentPrompt(rt.renderTeamSharedContext(sessionID), task.Prompt))
 			res := coordinatorResult{Role: task.Role, Prompt: task.Prompt, Summary: summary}
 			if err != nil {
 				res.Error = err.Error()
 			}
+			rt.finishTeamTask(ctx, sessionID, task, summary, err)
 			results[idx] = res
 		}(i, task)
 	}
@@ -211,6 +219,11 @@ func runTasksParallel(ctx context.Context, rt *Runtime, sessionID string, tasks 
 }
 
 func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coordinatorTask) []coordinatorResult {
+	team := rt.ensureAgentTeam(sessionID)
+	ctx = withAgentTeam(ctx, team.ID)
+	for _, task := range tasks {
+		rt.registerTeamTask(ctx, sessionID, task)
+	}
 	taskMap := make(map[string]int)
 	for i, task := range tasks {
 		taskMap[task.ID] = i
@@ -224,6 +237,7 @@ func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coo
 	executeTask := func(task coordinatorTask) {
 		defer wg.Done()
 		profile := rt.getAgentProfile(sessionID, task.Role)
+		memberSessionID := fmt.Sprintf("team-%s-%s", task.Role, task.ID)
 
 		// Wait for dependencies
 		for _, depID := range task.DependsOn {
@@ -237,11 +251,13 @@ func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coo
 		}
 
 		// Execute task
-		summary, err := rt.RunSubAgentWithProfile(ctx, profile, task.Prompt)
+		rt.startTeamTask(ctx, sessionID, task, memberSessionID)
+		summary, err := rt.RunSubAgentWithProfile(ctx, profile, buildTeamSubagentPrompt(rt.renderTeamSharedContext(sessionID), task.Prompt))
 		res := coordinatorResult{Role: task.Role, Prompt: task.Prompt, Summary: summary}
 		if err != nil {
 			res.Error = err.Error()
 		}
+		rt.finishTeamTask(ctx, sessionID, task, summary, err)
 
 		mu.Lock()
 		idx := taskMap[task.ID]

@@ -45,6 +45,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	}
 	rt.logger.Info("runAgentLoopWithRun start", zap.String("run_id", run.ID), zap.String("session", sessionID), zap.String("input", input.Text))
 	ctx, cancel := context.WithDeadline(ctx, run.Deadline)
+	ctx = withTeamSession(ctx, sessionID)
 	run.Cancel = cancel
 	defer cancel()
 	text := input.Text
@@ -54,6 +55,16 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	}
 	if hasPendingConfirmation {
 		return rt.handlePendingConfirmation(ctx, sessionID, text, pending, run, cb)
+	}
+	if resp, handled, cmdErr := rt.handleTeamCommand(ctx, sessionID, text); handled {
+		if cmdErr != nil {
+			finishRun(run, RunStatusFailed, "", cmdErr)
+			rt.finalizeRun(run, cb.emit, "run_failed", map[string]any{"error": cmdErr.Error()})
+			return Response{}, cmdErr
+		}
+		finishRun(run, RunStatusCompleted, resp.Reply, nil)
+		rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": resp.Reply})
+		return resp, nil
 	}
 	if resp, handled, cmdErr := rt.handleCheckpointCommand(ctx, sessionID, text); handled {
 		if cmdErr != nil {

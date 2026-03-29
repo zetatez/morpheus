@@ -62,6 +62,7 @@ export function App(props) {
     const [runsNextCursor, setRunsNextCursor] = createSignal(null);
     const [runsStatusFilter, setRunsStatusFilter] = createSignal("");
     const [activeRunBanner, setActiveRunBanner] = createSignal(null);
+    const [activeTodos, setActiveTodos] = createSignal([]);
     const [activeStreamToken, setActiveStreamToken] = createSignal(null);
     const [runTimeline, setRunTimeline] = createSignal(null);
     const [runTimelineID, setRunTimelineID] = createSignal(null);
@@ -82,8 +83,10 @@ export function App(props) {
     const [isTyping, setIsTyping] = createSignal(false);
     const [serverMetrics, setServerMetrics] = createSignal(null);
     const [currentModel, setCurrentModel] = createSignal("");
+    const [todoPulse, setTodoPulse] = createSignal(false);
     let monitorInterval;
     let metricsInterval;
+    let todoPulseInterval;
     let abortController;
     let escapeTimeoutRef;
     let inputQueue = [];
@@ -268,6 +271,27 @@ export function App(props) {
     const updateEntry = (id, updater) => {
         setEntries((prev) => prev.map((e) => (e.id === id ? updater(e) : e)));
         queueMicrotask(() => renderer.requestRender());
+    };
+    const formatTodoBlock = (todos) => {
+        if (todos.length === 0)
+            return "";
+        return `${todos.map((todo) => {
+            const mark = todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? "[•]" : todo.status === "failed" ? "[!]" : todo.status === "cancelled" ? "[-]" : "[ ]";
+            const suffix = todo.tool ? ` (${todo.tool})` : "";
+            const note = todo.note ? ` - ${todo.note}` : "";
+            return `${mark} ${todo.content}${suffix}${note}`;
+        }).join("\n")}`;
+    };
+    const todoLineColor = (todo, pulse) => {
+        if (todo.status === "completed")
+            return theme.todoDone;
+        if (todo.status === "failed")
+            return theme.todoFailed;
+        if (todo.status === "cancelled")
+            return theme.todoCancelled;
+        if (todo.status === "in_progress")
+            return pulse ? theme.primary : theme.todoActive;
+        return theme.todoPending;
     };
     const isConfirmationPrompt = (reply) => {
         if (!reply)
@@ -464,13 +488,13 @@ export function App(props) {
         const appendLoopNote = (eventKey, text) => {
             if (!isCurrentStream())
                 return;
+            if (lastLoopEvent === eventKey)
+                return;
             const normalized = text.trim();
             if (!normalized || normalized === "Thinking:" || normalized === "Thinking:\n") {
                 lastLoopEvent = eventKey;
                 return;
             }
-            if (lastLoopEvent === eventKey)
-                return;
             if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished") || text.includes("I have enough information to produce the answer")) {
                 lastLoopEvent = eventKey;
                 return;
@@ -540,16 +564,25 @@ export function App(props) {
                     return;
                 }
                 if (runType === "tool_execution_started") {
-                    setActiveRunBanner("Executing tool...");
+                    const tool = String((evt.data.data ?? {})["tool"] ?? "tool");
+                    setActiveRunBanner(`Executing ${tool}...`);
                     return;
                 }
                 if (runType === "tool_execution_finished") {
-                    setActiveRunBanner("Processing response...");
+                    const data = (evt.data.data ?? {});
+                    const tool = String(data["tool"] ?? "tool");
+                    const success = Boolean(data["success"]);
+                    setActiveRunBanner(success ? `Finished ${tool}` : `${tool} failed`);
                     appendLoopNote(`tool-finish:${evt.data.seq}`, "Thinking: tool finished, continuing with the next step.");
                     return;
                 }
                 if (runType === "run_started") {
                     setActiveRunBanner("Run started");
+                    return;
+                }
+                if (runType === "todos_updated") {
+                    const todos = Array.isArray((evt.data.data ?? {})["todos"]) ? (evt.data.data ?? {})["todos"] : [];
+                    setActiveTodos(todos);
                     return;
                 }
                 if (runType === "model_turn_finished") {
@@ -1207,7 +1240,7 @@ export function App(props) {
                 appendEntry({
                     id: crypto.randomUUID(),
                     role: "assistant",
-                    content: "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /resume\n  /plan <prompt>\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
+                    content: "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /resume\n  /plan <prompt>\n  /team\n  /team tasks\n  /team messages\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
                 });
                 return true;
             case "/resume": {
@@ -1711,9 +1744,12 @@ export function App(props) {
             }
         };
         initMetrics();
+        todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700);
         onCleanup(() => {
             if (metricsInterval)
                 clearInterval(metricsInterval);
+            if (todoPulseInterval)
+                clearInterval(todoPulseInterval);
         });
     });
     createEffect(() => {
@@ -1724,6 +1760,8 @@ export function App(props) {
     const width = createMemo(() => terminal().width);
     const height = createMemo(() => terminal().height);
     const contentHeight = createMemo(() => Math.max(5, height() - 6));
+    const todoPanelWidth = createMemo(() => activeTodos().length > 0 ? Math.min(42, Math.max(28, Math.floor(width() * 0.28))) : 0);
+    const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth()));
     return (<box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
       <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
         <text fg={theme.muted}>{apiUrl()}</text>
@@ -1736,8 +1774,9 @@ export function App(props) {
         <box paddingLeft={2}/>
         <text fg={theme.muted}>$ {serverMetrics()?.cost?.toFixed(4) ?? "0.0000"}</text>
       </box>
-      <scrollbox ref={(val) => (scroll = val)} height={contentHeight()} paddingLeft={2} paddingRight={2} paddingTop={1}>
-        <For each={entries()}>
+      <box flexDirection="row" height={contentHeight()}>
+        <scrollbox ref={(val) => (scroll = val)} width={mainPanelWidth()} height={contentHeight()} paddingLeft={2} paddingRight={2} paddingTop={1}>
+          <For each={entries()}>
           {(entry) => (<box flexDirection="column" paddingBottom={1}>
               {(entry.role === "tool" || entry.role === "error") && entry.title && (<text fg={entry.role === "error" ? theme.error : theme.tool} attributes={TextAttributes.BOLD}>
                   {entry.role === "tool" ? entry.title ?? "Tool" : "Error"}
@@ -1790,23 +1829,39 @@ export function App(props) {
                       </box>);
                 })()}
                 </box>) : entry.role === "queue" ? (<box flexDirection="column">
-                    <For each={renderMarkdownLines(entry.content ?? "", {
-                        text: theme.muted,
-                        muted: theme.muted,
-                        code: theme.muted,
-                        success: theme.success,
-                        output: theme.muted,
-                        file: theme.file,
-                        accent: theme.muted,
-                        error: theme.error,
-                        thinking: theme.thinking,
-                    })}>
-                      {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
-                    </For>
-                  </box>) : (<text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>)}
+                  <For each={renderMarkdownLines(entry.content ?? "", {
+                    text: theme.muted,
+                    muted: theme.muted,
+                    code: theme.muted,
+                    success: theme.success,
+                    output: theme.muted,
+                    file: theme.file,
+                    accent: theme.muted,
+                    error: theme.error,
+                    thinking: theme.thinking,
+                })}>
+                    {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
+                  </For>
+                </box>) : (<text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>)}
             </box>)}
-        </For>
-      </scrollbox>
+          </For>
+        </scrollbox>
+        {activeTodos().length > 0 && (<box width={todoPanelWidth()} height={contentHeight()} flexDirection="column" paddingLeft={1} paddingRight={2} paddingTop={1} backgroundColor={theme.todoPanel}>
+            <text fg={theme.primary} attributes={TextAttributes.BOLD}># Todos</text>
+            <box paddingBottom={1}/>
+            <For each={activeTodos()}>
+              {(todo) => {
+                const note = () => todo.note ? `  ${todo.note}` : todo.status === "failed" ? "  Retry or update with todo.write" : "";
+                return (<box flexDirection="column" paddingBottom={1}>
+                    <text fg={todoLineColor(todo, todoPulse())} attributes={todo.active ? TextAttributes.BOLD : TextAttributes.NONE}>
+                      {`${todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? (todoPulse() ? "[•]" : "[>]") : todo.status === "failed" ? "[!]" : todo.status === "cancelled" ? "[-]" : "[ ]"} ${todo.content}${todo.tool ? ` (${todo.tool})` : ""}`}
+                    </text>
+                    {note() && <text fg={todo.status === "failed" ? theme.todoFailed : theme.muted}>{note()}</text>}
+                  </box>);
+            }}
+            </For>
+          </box>)}
+      </box>
       {modal() && (<box width={width()} height={height()} justifyContent="center" alignItems="center">
           <box width={Math.min(80, width() - 4)} flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} backgroundColor={theme.panel}>
             <text fg={theme.primary} attributes={TextAttributes.BOLD}>

@@ -69,6 +69,7 @@ type Runtime struct {
 	agentRegistry        *AgentRegistry
 	sessionMemory        sync.Map
 	intentCache          sync.Map
+	teamState            sync.Map
 	subagents            *subagent.Loader
 	metrics              *serverMetrics
 	runs                 *runStore
@@ -243,6 +244,9 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		if coordinator, ok := tool.(*agenttool.CoordinatorTool); ok {
 			*coordinator = *agenttool.NewCoordinator(rt)
 		}
+		if messageTool, ok := tool.(*agenttool.MessageTool); ok {
+			*messageTool = *agenttool.NewMessage(rt)
+		}
 	}
 	if tool, ok := reg.Get("skill.invoke"); ok {
 		if skillInvoke, ok := tool.(*skilltool.Tool); ok {
@@ -267,6 +271,7 @@ func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mc
 	return []sdk.Tool{
 		rtAgent,
 		agenttool.NewCoordinator(nil),
+		agenttool.NewMessage(nil),
 		ask.NewQuestionTool(),
 		todotool.New(nil),
 		fstool.NewReadTool(cfg.WorkspaceRoot),
@@ -293,8 +298,12 @@ func toMCPServerConfigs(servers []config.MCPServerConfig) []mcp.ServerConfig {
 
 func (rt *Runtime) RunSubAgent(ctx context.Context, prompt string, allowedTools []string) (string, error) {
 	subID := fmt.Sprintf("subagent-%d", time.Now().UnixNano())
+	ctx = withTeamSession(ctx, subID)
 	if len(allowedTools) > 0 {
 		ctx = execpkg.WithAllowedTools(ctx, allowedTools)
+	}
+	if teamID := agentTeamIDFromContext(ctx); teamID != "" {
+		ctx = withAgentTeam(ctx, teamID)
 	}
 	resp, err := rt.AgentLoop(ctx, subID, UserInput{Text: prompt}, nil, AgentModeBuild)
 	if err != nil {
@@ -317,6 +326,14 @@ func (rt *Runtime) RunSubAgentWithProfile(ctx context.Context, profile agenttool
 	}
 
 	return rt.RunSubAgent(ctx, rolePrompt, allowedTools)
+}
+
+func (rt *Runtime) SendTeamMessage(ctx context.Context, from, to, kind, content, replyTo, threadID string, broadcast bool) (map[string]any, error) {
+	sessionID := teamSessionIDFromContext(ctx)
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = "default"
+	}
+	return rt.sendTeamMessage(ctx, sessionID, from, to, kind, content, replyTo, threadID, broadcast)
 }
 
 type sessionSkillSet struct {
@@ -488,6 +505,7 @@ func (rt *Runtime) clearSessionState(sessionID string) {
 	rt.taskState.Delete(sessionID)
 	rt.pendingConfirmations.Delete(sessionID)
 	rt.sessionMemory.Delete(sessionID)
+	rt.teamState.Delete(sessionID)
 	rt.checkpoints.Delete(sessionID)
 	compressionState.Delete(sessionID)
 }
@@ -902,6 +920,35 @@ func (rt *Runtime) handleCheckpointCommand(ctx context.Context, sessionID, input
 	return Response{}, true, fmt.Errorf("usage: /checkpoint [list] | /checkpoint show <id> | /checkpoint rollback <id> [--drop] | /checkpoint prune <keep>")
 }
 
+func (rt *Runtime) handleTeamCommand(ctx context.Context, sessionID, input string) (Response, bool, error) {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/team") {
+		return Response{}, false, nil
+	}
+	args := strings.Fields(trimmed)
+	if len(args) == 1 || (len(args) == 2 && args[1] == "status") {
+		reply := rt.formatTeamStatus(sessionID)
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if len(args) == 2 && args[1] == "tasks" {
+		reply := rt.formatTeamTasks(sessionID)
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if len(args) == 2 && args[1] == "messages" {
+		reply := rt.formatTeamMessages(sessionID, "")
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if len(args) == 4 && args[1] == "messages" && args[2] == "--thread" {
+		reply := rt.formatTeamMessages(sessionID, args[3])
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	return Response{}, true, fmt.Errorf("usage: /team [status] | /team tasks | /team messages [--thread <id>]")
+}
+
 func valueOrDash(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -1096,6 +1143,8 @@ func isConfirmationDenial(input string) bool {
 func isReservedCommand(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "new", "sessions", "skills", "models", "monitor", "resume", "plan", "vim", "ssh", "connect", "help", "exit", "checkpoint":
+		return true
+	case "team":
 		return true
 	default:
 		return false

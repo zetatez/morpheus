@@ -1287,7 +1287,7 @@ export function App(props: AppProps) {
           id: crypto.randomUUID(),
           role: "assistant",
           content:
-            "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /resume\n  /plan <prompt>\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
+            "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /resume\n  /plan <prompt>\n  /team\n  /team tasks\n  /team messages\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
         })
         return true
       case "/resume": {
