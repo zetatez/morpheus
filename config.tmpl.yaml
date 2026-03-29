@@ -14,6 +14,10 @@ planner:
 
 server:
   listen: :8080
+  remote:
+    enabled: true
+    # Optional bearer token for WebSocket/remote control.
+    # bearer_token: ${MORPHEUS_REMOTE_TOKEN}
   limits:
     enabled: true
     max_cpu_percent: 85

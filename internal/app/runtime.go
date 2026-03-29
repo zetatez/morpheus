@@ -3079,6 +3079,7 @@ func (s *APIServer) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/remote-file", s.handleRemoteFile)
 	s.mux.HandleFunc("/api/v1/ssh-info", s.handleSSHInfo)
 	s.mux.HandleFunc("/api/v1/chat", s.wrapLimited("chat", s.handleChat))
+	s.mux.HandleFunc("/api/v1/ws", s.handleRemoteWS)
 	s.mux.HandleFunc("/repl", s.wrapLimited("repl", s.handleRepl))
 	s.mux.HandleFunc("/repl/stream", s.wrapLimited("repl_stream", s.handleReplStream))
 }

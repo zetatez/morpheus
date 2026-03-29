@@ -14,6 +14,8 @@ planner:
 
 server:
   listen: :8080
+  remote:
+    enabled: true
   limits:
     enabled: true
     max_cpu_percent: 85

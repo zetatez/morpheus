@@ -41,8 +41,14 @@ type PlannerConfig struct {
 }
 
 type ServerConfig struct {
-	Listen string            `mapstructure:"listen"`
-	Limits ServerLimitConfig `mapstructure:"limits"`
+	Listen string             `mapstructure:"listen"`
+	Limits ServerLimitConfig  `mapstructure:"limits"`
+	Remote ServerRemoteConfig `mapstructure:"remote"`
+}
+
+type ServerRemoteConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	BearerToken string `mapstructure:"bearer_token"`
 }
 
 type ServerLimitConfig struct {
@@ -136,6 +142,7 @@ func (c *Config) expandPaths() {
 	c.KnowledgeBase.Path = expandPath(c.KnowledgeBase.Path)
 	c.Planner.Endpoint = expandPath(c.Planner.Endpoint)
 	c.Planner.APIKey = expandEnvValue(c.Planner.APIKey)
+	c.Server.Remote.BearerToken = expandEnvValue(c.Server.Remote.BearerToken)
 
 	c.loadAPIKeyFromEnv()
 }
@@ -209,6 +216,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.file", filepath.Join(dataHome, "logs", "morpheus.log"))
 	v.SetDefault("server.listen", ":8080")
+	v.SetDefault("server.remote.enabled", true)
+	v.SetDefault("server.remote.bearer_token", "")
 	v.SetDefault("server.limits.enabled", true)
 	v.SetDefault("server.limits.max_cpu_percent", 85)
 	v.SetDefault("server.limits.max_memory_percent", 85)
