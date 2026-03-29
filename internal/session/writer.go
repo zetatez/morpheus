@@ -21,16 +21,26 @@ const conversationFilename = "conversation.raw.md"
 const metadataFilename = "session.meta.json"
 
 type Metadata struct {
-	SessionID        string    `json:"session_id"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Summary          string    `json:"summary,omitempty"`
-	ShortTerm        string    `json:"short_term,omitempty"`
-	LongTerm         string    `json:"long_term,omitempty"`
-	AllowedSkills    []string  `json:"allowed_skills,omitempty"`
-	AllowedSubagents []string  `json:"allowed_subagents,omitempty"`
-	LastTaskNote     string    `json:"last_task_note,omitempty"`
-	CompressedAt     time.Time `json:"compressed_at,omitempty"`
-	IsCodeTask       bool      `json:"is_code_task,omitempty"`
+	SessionID        string               `json:"session_id"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	Summary          string               `json:"summary,omitempty"`
+	ShortTerm        string               `json:"short_term,omitempty"`
+	LongTerm         string               `json:"long_term,omitempty"`
+	AllowedSkills    []string             `json:"allowed_skills,omitempty"`
+	AllowedSubagents []string             `json:"allowed_subagents,omitempty"`
+	LastTaskNote     string               `json:"last_task_note,omitempty"`
+	CompressedAt     time.Time            `json:"compressed_at,omitempty"`
+	IsCodeTask       bool                 `json:"is_code_task,omitempty"`
+	Checkpoints      []CheckpointMetadata `json:"checkpoints,omitempty"`
+	CheckpointedAt   time.Time            `json:"checkpointed_at,omitempty"`
+}
+
+type CheckpointMetadata struct {
+	ID        string    `json:"id"`
+	Ref       string    `json:"ref"`
+	Tool      string    `json:"tool,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	Summary   string    `json:"summary,omitempty"`
 }
 
 func NewWriter(sessionPath string, retention time.Duration) *Writer {

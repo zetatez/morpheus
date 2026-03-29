@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,6 +72,7 @@ type Runtime struct {
 	subagents            *subagent.Loader
 	metrics              *serverMetrics
 	runs                 *runStore
+	checkpoints          sync.Map
 }
 
 type sessionTaskState struct {
@@ -90,10 +92,18 @@ type sessionIntentState struct {
 	entries map[string]intentClassification
 }
 
+type sessionCheckpointState struct {
+	mu               sync.RWMutex
+	entries          []session.CheckpointMetadata
+	lastCheckpointAt time.Time
+	seq              int64
+}
+
 type pendingConfirmation struct {
 	Tool     string
 	Inputs   map[string]any
 	Decision sdk.PolicyDecision
+	Kind     string
 }
 
 type ConfirmationDecision struct {
@@ -478,6 +488,7 @@ func (rt *Runtime) clearSessionState(sessionID string) {
 	rt.taskState.Delete(sessionID)
 	rt.pendingConfirmations.Delete(sessionID)
 	rt.sessionMemory.Delete(sessionID)
+	rt.checkpoints.Delete(sessionID)
 	compressionState.Delete(sessionID)
 }
 
@@ -504,6 +515,8 @@ func (rt *Runtime) sessionMetadata(sessionID, summary string) session.Metadata {
 		LastTaskNote:     rt.lastTaskNote(sessionID),
 		CompressedAt:     compressionSessionState(sessionID).lastCompressedAt,
 		IsCodeTask:       rt.isCodeTask(sessionID),
+		Checkpoints:      rt.checkpointEntries(sessionID),
+		CheckpointedAt:   rt.lastCheckpointAt(sessionID),
 	}
 }
 
@@ -525,12 +538,387 @@ func (rt *Runtime) restoreSessionMetadata(sessionID string, meta session.Metadat
 	rt.restoreAllowedSubagents(sessionID, meta.AllowedSubagents)
 	rt.setLastTaskNote(sessionID, meta.LastTaskNote)
 	rt.setIsCodeTask(sessionID, meta.IsCodeTask)
+	rt.restoreCheckpoints(sessionID, meta.Checkpoints, meta.CheckpointedAt)
 	if !meta.CompressedAt.IsZero() {
 		state := compressionSessionState(sessionID)
 		state.mu.Lock()
 		state.lastCompressedAt = meta.CompressedAt
 		state.mu.Unlock()
 	}
+}
+
+func (rt *Runtime) sessionCheckpointState(sessionID string) *sessionCheckpointState {
+	if current, ok := rt.checkpoints.Load(sessionID); ok {
+		return current.(*sessionCheckpointState)
+	}
+	state := &sessionCheckpointState{}
+	actual, _ := rt.checkpoints.LoadOrStore(sessionID, state)
+	return actual.(*sessionCheckpointState)
+}
+
+func (rt *Runtime) checkpointEntries(sessionID string) []session.CheckpointMetadata {
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	if len(state.entries) == 0 {
+		return nil
+	}
+	out := make([]session.CheckpointMetadata, len(state.entries))
+	copy(out, state.entries)
+	return out
+}
+
+func (rt *Runtime) lastCheckpointAt(sessionID string) time.Time {
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.lastCheckpointAt
+}
+
+func (rt *Runtime) restoreCheckpoints(sessionID string, entries []session.CheckpointMetadata, checkpointedAt time.Time) {
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.entries = append([]session.CheckpointMetadata(nil), entries...)
+	state.lastCheckpointAt = checkpointedAt
+	state.seq = int64(len(entries))
+}
+
+const (
+	checkpointCooldown       = 30 * time.Second
+	maxCheckpointsPerSession = 20
+)
+
+func (rt *Runtime) maybeCreateCheckpoint(ctx context.Context, sessionID, toolName string, inputs map[string]any) {
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = "default"
+	}
+	if !rt.isGitWorkspace() {
+		return
+	}
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.RLock()
+	last := state.lastCheckpointAt
+	state.mu.RUnlock()
+	if !last.IsZero() && time.Since(last) < checkpointCooldown {
+		return
+	}
+	checkpoint, err := rt.createCheckpoint(sessionID, toolName, inputs)
+	if err != nil {
+		rt.logger.Debug("checkpoint skipped", zap.String("sessionID", sessionID), zap.String("tool", toolName), zap.Error(err))
+		return
+	}
+	state.mu.Lock()
+	stale := append([]session.CheckpointMetadata(nil), state.entries[max(0, maxCheckpointsPerSession-1):]...)
+	state.entries = append([]session.CheckpointMetadata{checkpoint}, state.entries...)
+	if len(state.entries) > maxCheckpointsPerSession {
+		state.entries = state.entries[:maxCheckpointsPerSession]
+	}
+	state.lastCheckpointAt = checkpoint.CreatedAt
+	state.seq++
+	state.mu.Unlock()
+	rt.pruneCheckpointRefs(stale)
+	_ = rt.persistSession(ctx, sessionID)
+}
+
+func (rt *Runtime) createCheckpoint(sessionID, toolName string, inputs map[string]any) (session.CheckpointMetadata, error) {
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	id := fmt.Sprintf("cp-%d", time.Now().Unix())
+	summary := checkpointSummary(toolName, inputs)
+	message := checkpointMessage(id, summary)
+	cmd := exec.Command("git", "stash", "push", "--all", "--message", message)
+	cmd.Dir = workspace
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return session.CheckpointMetadata{}, fmt.Errorf("create checkpoint: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	ref, err := rt.resolveCheckpointRef(workspace, message)
+	if err != nil {
+		return session.CheckpointMetadata{}, err
+	}
+	return session.CheckpointMetadata{ID: id, Ref: ref, Tool: toolName, CreatedAt: time.Now().UTC(), Summary: summary}, nil
+}
+
+func checkpointMessage(id, summary string) string {
+	return fmt.Sprintf("morpheus checkpoint %s [%s]", id, summary)
+}
+
+func (rt *Runtime) resolveCheckpointRef(workspace, message string) (string, error) {
+	cmd := exec.Command("git", "stash", "list", "--format=%gd:%s")
+	cmd.Dir = workspace
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve checkpoint ref: %w", err)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, ":") || !strings.Contains(line, message) {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		return strings.TrimSpace(parts[0]), nil
+	}
+	return "", fmt.Errorf("checkpoint ref not found")
+}
+
+func (rt *Runtime) rollbackCheckpoint(sessionID, id string, drop bool) (string, error) {
+	entry, err := rt.findCheckpoint(sessionID, id)
+	if err != nil {
+		return "", err
+	}
+	if err := rt.validateCheckpointRef(entry); err != nil {
+		return "", err
+	}
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	cmd := exec.Command("git", "stash", "apply", entry.Ref)
+	cmd.Dir = workspace
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("rollback checkpoint %s: %w: %s", id, err, strings.TrimSpace(string(output)))
+	}
+	if drop {
+		rt.removeCheckpoint(sessionID, id)
+		rt.pruneCheckpointRefs([]session.CheckpointMetadata{entry})
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func (rt *Runtime) pruneCheckpointRefs(entries []session.CheckpointMetadata) {
+	if len(entries) == 0 {
+		return
+	}
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Ref) == "" {
+			continue
+		}
+		if err := rt.validateCheckpointRef(entry); err != nil {
+			rt.logger.Debug("skip dropping non-morpheus stash", zap.String("ref", entry.Ref), zap.Error(err))
+			continue
+		}
+		cmd := exec.Command("git", "stash", "drop", entry.Ref)
+		cmd.Dir = workspace
+		if output, err := cmd.CombinedOutput(); err != nil {
+			rt.logger.Debug("failed to drop checkpoint stash", zap.String("ref", entry.Ref), zap.Error(err), zap.String("output", strings.TrimSpace(string(output))))
+		}
+	}
+}
+
+func (rt *Runtime) pruneCheckpoints(sessionID string, keep int) int {
+	if keep < 0 {
+		keep = 0
+	}
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.entries) <= keep {
+		return 0
+	}
+	removed := append([]session.CheckpointMetadata(nil), state.entries[keep:]...)
+	state.entries = append([]session.CheckpointMetadata(nil), state.entries[:keep]...)
+	go rt.pruneCheckpointRefs(removed)
+	return len(removed)
+}
+
+func (rt *Runtime) validateCheckpointRef(entry session.CheckpointMetadata) error {
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	cmd := exec.Command("git", "stash", "list", "--format=%gd:%s")
+	cmd.Dir = workspace
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("validate checkpoint ref: %w", err)
+	}
+	expectedStart := fmt.Sprintf("%s:morpheus checkpoint %s ", strings.TrimSpace(entry.Ref), entry.ID)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, expectedStart) {
+			return nil
+		}
+	}
+	return fmt.Errorf("stash ref %s is not a morpheus checkpoint for %s", entry.Ref, entry.ID)
+}
+
+func (rt *Runtime) gitWorkspaceDirty() (bool, string, error) {
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	cmd := exec.Command("git", "status", "--short")
+	cmd.Dir = workspace
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, "", fmt.Errorf("git status: %w", err)
+	}
+	status := strings.TrimSpace(string(output))
+	return status != "", status, nil
+}
+
+func (rt *Runtime) findCheckpoint(sessionID, id string) (session.CheckpointMetadata, error) {
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	for _, entry := range state.entries {
+		if entry.ID == id {
+			return entry, nil
+		}
+	}
+	return session.CheckpointMetadata{}, fmt.Errorf("checkpoint %s not found", id)
+}
+
+func (rt *Runtime) removeCheckpoint(sessionID, id string) {
+	state := rt.sessionCheckpointState(sessionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.entries) == 0 {
+		return
+	}
+	filtered := state.entries[:0]
+	for _, entry := range state.entries {
+		if entry.ID == id {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	state.entries = filtered
+}
+
+func (rt *Runtime) isGitWorkspace() bool {
+	workspace := strings.TrimSpace(rt.cfg.WorkspaceRoot)
+	if workspace == "" {
+		workspace = "."
+	}
+	info, err := os.Stat(filepath.Join(workspace, ".git"))
+	return err == nil && !info.IsDir() || err == nil && info.IsDir()
+}
+
+func checkpointSummary(toolName string, inputs map[string]any) string {
+	summary := strings.TrimSpace(toolName)
+	switch toolName {
+	case "cmd.exec":
+		if command, _ := inputs["command"].(string); strings.TrimSpace(command) != "" {
+			summary = truncate(strings.TrimSpace(command), 80)
+		}
+	case "fs.write", "fs.edit", "fs.read", "bash":
+		if path, _ := inputs["path"].(string); strings.TrimSpace(path) != "" {
+			summary = fmt.Sprintf("%s %s", toolName, strings.TrimSpace(path))
+		}
+	}
+	if summary == "" {
+		summary = "tool execution"
+	}
+	return summary
+}
+
+func (rt *Runtime) handleCheckpointCommand(ctx context.Context, sessionID, input string) (Response, bool, error) {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/checkpoint") {
+		return Response{}, false, nil
+	}
+	args := strings.Fields(trimmed)
+	dropAfterRollback := len(args) == 4 && args[3] == "--drop"
+	if len(args) == 1 || (len(args) == 2 && args[1] == "list") {
+		entries := rt.checkpointEntries(sessionID)
+		if len(entries) == 0 {
+			reply := "No checkpoints available."
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+			return Response{Reply: reply}, true, nil
+		}
+		var b strings.Builder
+		b.WriteString("Available checkpoints:\n")
+		for _, entry := range entries {
+			b.WriteString(fmt.Sprintf("- %s | %s | ref=%s | tool=%s | %s\n", entry.ID, entry.CreatedAt.Format(time.RFC3339), valueOrDash(entry.Ref), valueOrDash(entry.Tool), entry.Summary))
+		}
+		reply := strings.TrimSpace(b.String())
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if len(args) == 3 && args[1] == "prune" {
+		keep, err := strconv.Atoi(args[2])
+		if err != nil {
+			return Response{}, true, fmt.Errorf("usage: /checkpoint prune <keep>")
+		}
+		removed := rt.pruneCheckpoints(sessionID, keep)
+		_ = rt.persistSession(ctx, sessionID)
+		reply := fmt.Sprintf("Pruned %d checkpoint(s); kept %d.", removed, keep)
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if len(args) == 3 && args[1] == "show" {
+		entry, err := rt.findCheckpoint(sessionID, args[2])
+		if err != nil {
+			return Response{}, true, err
+		}
+		reply := formatCheckpointDetail(entry)
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		return Response{Reply: reply}, true, nil
+	}
+	if (len(args) == 3 || len(args) == 4) && args[1] == "rollback" && (!dropAfterRollback && len(args) == 3 || dropAfterRollback) {
+		dirty, status, err := rt.gitWorkspaceDirty()
+		if err != nil {
+			return Response{}, true, err
+		}
+		if dirty {
+			pending := pendingConfirmation{
+				Kind:   "checkpoint_rollback",
+				Tool:   "checkpoint.rollback",
+				Inputs: map[string]any{"id": args[2], "status": status, "drop": dropAfterRollback},
+			}
+			rt.setPendingConfirmation(sessionID, pending)
+			question := formatConfirmationPrompt(pending)
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", question, nil)
+			payload := confirmationPayload(pending)
+			return Response{Reply: question, Confirmation: payload}, true, nil
+		}
+		output, err := rt.rollbackCheckpoint(sessionID, args[2], dropAfterRollback)
+		if err != nil {
+			return Response{}, true, err
+		}
+		reply := fmt.Sprintf("Rolled back to checkpoint %s.", args[2])
+		if dropAfterRollback {
+			reply = fmt.Sprintf("Rolled back to checkpoint %s and dropped it.", args[2])
+		}
+		if output != "" {
+			reply += "\n" + output
+		}
+		_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+		_ = rt.persistSession(ctx, sessionID)
+		return Response{Reply: reply}, true, nil
+	}
+	return Response{}, true, fmt.Errorf("usage: /checkpoint [list] | /checkpoint show <id> | /checkpoint rollback <id> [--drop] | /checkpoint prune <keep>")
+}
+
+func valueOrDash(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "-"
+	}
+	return text
+}
+
+func formatCheckpointDetail(entry session.CheckpointMetadata) string {
+	var b strings.Builder
+	b.WriteString("Checkpoint details:\n")
+	b.WriteString(fmt.Sprintf("- id: %s\n", valueOrDash(entry.ID)))
+	b.WriteString(fmt.Sprintf("- created_at: %s\n", valueOrDash(entry.CreatedAt.Format(time.RFC3339))))
+	b.WriteString(fmt.Sprintf("- ref: %s\n", valueOrDash(entry.Ref)))
+	b.WriteString(fmt.Sprintf("- tool: %s\n", valueOrDash(entry.Tool)))
+	b.WriteString(fmt.Sprintf("- summary: %s", valueOrDash(entry.Summary)))
+	return b.String()
 }
 
 func (rt *Runtime) sessionTaskState(sessionID string) *sessionTaskState {
@@ -705,6 +1093,15 @@ func isConfirmationDenial(input string) bool {
 	return false
 }
 
+func isReservedCommand(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "new", "sessions", "skills", "models", "monitor", "resume", "plan", "vim", "ssh", "connect", "help", "exit", "checkpoint":
+		return true
+	default:
+		return false
+	}
+}
+
 func formatConfirmationPrompt(pending pendingConfirmation) string {
 	parts := []string{"# Confirmation Required"}
 
@@ -727,6 +1124,16 @@ func formatConfirmationPrompt(pending pendingConfirmation) string {
 	case "cmd.exec":
 		if cmd, ok := pending.Inputs["command"].(string); ok && strings.TrimSpace(cmd) != "" {
 			parts = append(parts, "", "## Command", "```bash", strings.TrimSpace(cmd), "```")
+		}
+	case "checkpoint.rollback":
+		if id, ok := pending.Inputs["id"].(string); ok && strings.TrimSpace(id) != "" {
+			parts = append(parts, "", "## Checkpoint", strings.TrimSpace(id))
+		}
+		if drop, _ := pending.Inputs["drop"].(bool); drop {
+			parts = append(parts, "", "## Post Action", "Drop checkpoint stash after successful rollback")
+		}
+		if status, ok := pending.Inputs["status"].(string); ok && strings.TrimSpace(status) != "" {
+			parts = append(parts, "", "## Working Tree Changes", "```", truncate(strings.TrimSpace(status), 2000), "```")
 		}
 	case "fs.write", "fs.edit", "fs.read":
 		if path, ok := pending.Inputs["path"].(string); ok && strings.TrimSpace(path) != "" {
@@ -934,19 +1341,6 @@ func extractRequestedSubagents(input string) []string {
 		}
 	}
 	return out
-}
-
-func isReservedCommand(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return false
-	}
-	switch name {
-	case "help", "new", "sessions", "skills", "models", "connect", "exit":
-		return true
-	default:
-		return false
-	}
 }
 
 func formatMCPResourceUpdate(server, uri string, payload map[string]any) string {
@@ -1485,12 +1879,31 @@ func (rt *Runtime) contextDocumentSources() []contextSource {
 	if workspace == "" {
 		workspace = "."
 	}
-	projectPath := filepath.Join(workspace, ".morpheus.md")
-	globalPath := filepath.Join(configstore.DefaultConfigDir(), "morpheus.md")
+	projectPath := rt.resolveProjectContextPath(workspace)
+	globalPath := filepath.Join(userHomeDir(), ".morpheus.md")
 	return []contextSource{
-		{Label: "Global context (.config/morpheus/morpheus.md)", Path: globalPath},
-		{Label: "Project context (.morpheus.md)", Path: projectPath},
+		{Label: "Global context (~/.morpheus.md)", Path: globalPath},
+		{Label: "Project context (" + filepath.Base(projectPath) + ")", Path: projectPath},
 	}
+}
+
+func (rt *Runtime) resolveProjectContextPath(workspace string) string {
+	path := strings.TrimSpace(rt.cfg.Morpheus.ContextFile)
+	if path == "" {
+		path = ".morpheus.md"
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(workspace, path)
+}
+
+func userHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "."
+	}
+	return home
 }
 
 func readContextFile(path string) string {

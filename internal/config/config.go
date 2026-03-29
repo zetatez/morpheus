@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	WorkspaceRoot string              `mapstructure:"workspace_root"`
+	Morpheus      MorpheusConfig      `mapstructure:"morpheus"`
 	Logging       LoggingConfig       `mapstructure:"logging"`
 	Planner       PlannerConfig       `mapstructure:"planner"`
 	Server        ServerConfig        `mapstructure:"server"`
@@ -20,6 +21,10 @@ type Config struct {
 	KnowledgeBase KnowledgeBaseConfig `mapstructure:"knowledge_base"`
 	Permissions   Permissions         `mapstructure:"permissions"`
 	Agent         AgentConfig         `mapstructure:"subagents"`
+}
+
+type MorpheusConfig struct {
+	ContextFile string `mapstructure:"context_file"`
 }
 
 type LoggingConfig struct {
@@ -124,6 +129,7 @@ func Load(path string) (Config, error) {
 
 func (c *Config) expandPaths() {
 	c.WorkspaceRoot = expandPath(c.WorkspaceRoot)
+	c.Morpheus.ContextFile = expandPath(c.Morpheus.ContextFile)
 	c.Logging.File = expandPath(c.Logging.File)
 	c.Session.Path = expandPath(c.Session.Path)
 	c.Session.SQLitePath = expandPath(c.Session.SQLitePath)
@@ -199,6 +205,7 @@ func setDefaults(v *viper.Viper) {
 	dataHome := defaultDataHome()
 
 	v.SetDefault("workspace_root", "./")
+	v.SetDefault("morpheus.context_file", ".morpheus.md")
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.file", filepath.Join(dataHome, "logs", "morpheus.log"))
 	v.SetDefault("server.listen", ":8080")

@@ -340,8 +340,6 @@ type Manager struct {
 ```yaml
 # 支持 .morpheus.md (项目级)
 # 支持 ~/.morpheus.md (全局级)
-morpheus:
-  context_file: .morpheus.md
 ```
 
 #### 5.1.2 增强智能上下文压缩

@@ -55,6 +55,16 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	if hasPendingConfirmation {
 		return rt.handlePendingConfirmation(ctx, sessionID, text, pending, run, cb)
 	}
+	if resp, handled, cmdErr := rt.handleCheckpointCommand(ctx, sessionID, text); handled {
+		if cmdErr != nil {
+			finishRun(run, RunStatusFailed, "", cmdErr)
+			rt.finalizeRun(run, cb.emit, "run_failed", map[string]any{"error": cmdErr.Error()})
+			return Response{}, cmdErr
+		}
+		finishRun(run, RunStatusCompleted, resp.Reply, nil)
+		rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": resp.Reply})
+		return resp, nil
+	}
 	if updated, skillName, ok := rt.preprocessSkillCommand(ctx, text); ok {
 		text = updated
 		rt.allowSkill(sessionID, skillName)
@@ -280,6 +290,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)
 			result, execErr := rt.orchestrator.ExecuteStep(toolCtx, sessionID, planStep)
 			toolCancel()
+			rt.maybeCreateCheckpoint(ctx, sessionID, toolName, call.Arguments)
 			result.StepID = stepID
 			if execErr != nil {
 				if confirmErr, ok := exec.IsConfirmationRequired(execErr); ok {
@@ -406,9 +417,32 @@ func (rt *Runtime) handlePendingConfirmation(ctx context.Context, sessionID stri
 	}
 	if isConfirmationApproval(text) {
 		rt.clearPendingConfirmation(sessionID)
+		if pending.Kind == "checkpoint_rollback" {
+			id, _ := pending.Inputs["id"].(string)
+			drop, _ := pending.Inputs["drop"].(bool)
+			output, err := rt.rollbackCheckpoint(sessionID, id, drop)
+			if err != nil {
+				finishRun(run, RunStatusFailed, "", err)
+				rt.finalizeRun(run, cb.emit, "run_failed", map[string]any{"error": err.Error()})
+				return Response{}, err
+			}
+			reply := fmt.Sprintf("Rolled back to checkpoint %s.", strings.TrimSpace(id))
+			if drop {
+				reply = fmt.Sprintf("Rolled back to checkpoint %s and dropped it.", strings.TrimSpace(id))
+			}
+			if strings.TrimSpace(output) != "" {
+				reply += "\n" + output
+			}
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+			_ = rt.persistSession(ctx, sessionID)
+			finishRun(run, RunStatusCompleted, reply, nil)
+			rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": reply})
+			return Response{Plan: sdk.Plan{Summary: "Checkpoint rollback", Status: sdk.PlanStatusDone}, Reply: reply}, nil
+		}
 		stepID := uuid.NewString()
 		planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", pending.Tool), Tool: pending.Tool, Inputs: pending.Inputs, Status: sdk.StepStatusRunning}
 		result, execErr := rt.orchestrator.ExecuteStep(exec.WithConfirmation(ctx), sessionID, planStep)
+		rt.maybeCreateCheckpoint(ctx, sessionID, pending.Tool, pending.Inputs)
 		result.StepID = stepID
 		if execErr != nil {
 			result.Success = false
