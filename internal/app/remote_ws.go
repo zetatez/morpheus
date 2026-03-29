@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,9 @@ type remoteWSRequest struct {
 	SessionID   string            `json:"session_id,omitempty"`
 	Input       string            `json:"input,omitempty"`
 	RunID       string            `json:"run_id,omitempty"`
+	Query       string            `json:"query,omitempty"`
+	Status      string            `json:"status,omitempty"`
+	Cursor      string            `json:"cursor,omitempty"`
 	AfterSeq    int64             `json:"after_seq,omitempty"`
 	Limit       int               `json:"limit,omitempty"`
 	Attachments []InputAttachment `json:"attachments,omitempty"`
@@ -51,17 +55,24 @@ func (s *APIServer) handleRemoteWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	clientID := uuid.NewString()
+	writeMu := &sync.Mutex{}
 	s.logger.Info("remote ws connected", zap.String("client_id", clientID), zap.String("remote", r.RemoteAddr))
-	_ = conn.WriteJSON(remoteWSMessage{Type: "ready", Data: map[string]any{"client_id": clientID, "server_time": time.Now().UTC()}})
+	s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "ready", Data: map[string]any{"client_id": clientID, "server_time": time.Now().UTC()}})
 	for {
 		var req remoteWSRequest
 		if err := conn.ReadJSON(&req); err != nil {
 			return
 		}
-		if err := s.handleRemoteWSRequest(r.Context(), conn, req); err != nil {
-			_ = conn.WriteJSON(remoteWSMessage{Type: "error", Error: err.Error()})
+		if err := s.handleRemoteWSRequest(r.Context(), writeMu, conn, req); err != nil {
+			s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "error", Error: err.Error()})
 		}
 	}
+}
+
+func (s *APIServer) writeRemoteWS(mu *sync.Mutex, conn *websocket.Conn, msg remoteWSMessage) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return conn.WriteJSON(msg)
 }
 
 func (s *APIServer) authorizeRemote(r *http.Request) bool {
@@ -76,17 +87,48 @@ func (s *APIServer) authorizeRemote(r *http.Request) bool {
 	return strings.TrimSpace(r.URL.Query().Get("token")) == token
 }
 
-func (s *APIServer) handleRemoteWSRequest(ctx context.Context, conn *websocket.Conn, req remoteWSRequest) error {
+func (s *APIServer) handleRemoteWSRequest(ctx context.Context, writeMu *sync.Mutex, conn *websocket.Conn, req remoteWSRequest) error {
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
 		sessionID = "default"
 	}
 	switch strings.ToLower(strings.TrimSpace(req.Type)) {
 	case "ping":
-		return conn.WriteJSON(remoteWSMessage{Type: "pong", Data: map[string]any{"time": time.Now().UTC()}})
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "pong", Data: map[string]any{"time": time.Now().UTC()}})
+	case "session.list":
+		query := strings.ToLower(strings.TrimSpace(req.Query))
+		items := []map[string]any{}
+		if s.runtime.sessionStore != nil {
+			metas, err := s.runtime.sessionStore.ListSessions(ctx, query)
+			if err != nil {
+				return err
+			}
+			for _, meta := range metas {
+				items = append(items, map[string]any{"id": meta.SessionID, "updated_at": meta.UpdatedAt, "summary": meta.Summary})
+			}
+		}
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "session.list", Data: map[string]any{"sessions": items}})
 	case "session.get":
 		messages := s.runtime.conversation.History(ctx, sessionID)
-		return conn.WriteJSON(remoteWSMessage{Type: "session", Data: map[string]any{"session_id": sessionID, "messages": messages, "summary": s.runtime.conversation.Summary(sessionID)}})
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "session", Data: map[string]any{"session_id": sessionID, "messages": messages, "summary": s.runtime.conversation.Summary(sessionID)}})
+	case "run.list":
+		limit := req.Limit
+		if limit <= 0 || limit > 100 {
+			limit = 20
+		}
+		items := []map[string]any{}
+		nextCursor := ""
+		if s.runtime.sessionStore != nil {
+			storedRuns, next, err := s.runtime.sessionStore.ListRunsBySession(ctx, sessionID, strings.TrimSpace(req.Status), limit, strings.TrimSpace(req.Cursor))
+			if err != nil {
+				return err
+			}
+			for _, run := range storedRuns {
+				items = append(items, map[string]any{"run_id": run.ID, "run_status": run.Status, "reply": run.Reply, "updated_at": run.UpdatedAt, "created_at": run.CreatedAt, "last_step": run.LastStep, "error": run.Error})
+			}
+			nextCursor = next
+		}
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "run.list", Data: map[string]any{"session_id": sessionID, "runs": items, "next_cursor": nextCursor}})
 	case "run.start":
 		if strings.TrimSpace(req.Input) == "" {
 			return fmt.Errorf("input is required")
@@ -99,7 +141,7 @@ func (s *APIServer) handleRemoteWSRequest(ctx context.Context, conn *websocket.C
 		go func() {
 			_, _ = s.runtime.runAgentLoopWithRun(context.Background(), run, sessionID, UserInput{Text: req.Input, Attachments: req.Attachments}, req.Format, mode, runnerCallbacks{callChat: s.runtime.callChatWithTools})
 		}()
-		return conn.WriteJSON(remoteWSMessage{Type: "run.started", Data: map[string]any{"session_id": sessionID, "run_id": run.ID, "run_status": run.Status}})
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "run.started", Data: map[string]any{"session_id": sessionID, "run_id": run.ID, "run_status": run.Status}})
 	case "run.events":
 		if strings.TrimSpace(req.RunID) == "" {
 			return fmt.Errorf("run_id is required")
@@ -120,7 +162,51 @@ func (s *APIServer) handleRemoteWSRequest(ctx context.Context, conn *websocket.C
 		if err := s.runtime.replayRunEvents(ctx, req.RunID, req.AfterSeq, emit); err != nil {
 			return err
 		}
-		return conn.WriteJSON(remoteWSMessage{Type: "run.events.complete", Data: map[string]any{"run_id": req.RunID}})
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "run.events.complete", Data: map[string]any{"run_id": req.RunID}})
+	case "run.subscribe":
+		if strings.TrimSpace(req.RunID) == "" {
+			return fmt.Errorf("run_id is required")
+		}
+		run, ok := s.runtime.runs.get(req.RunID)
+		if !ok {
+			return fmt.Errorf("run not found")
+		}
+		sub := run.subscribe()
+		defer run.unsubscribe(sub)
+		if err := s.runtime.replayRunEvents(ctx, req.RunID, req.AfterSeq, func(event string, data interface{}) error {
+			payload, _ := data.(map[string]any)
+			return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: event, Data: payload})
+		}); err != nil {
+			return err
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case evt := <-sub:
+				if err := s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: evt.Type, Data: map[string]any{"run_id": req.RunID, "seq": evt.Seq, "type": evt.Type, "data": evt.Data, "time": evt.Time}}); err != nil {
+					return err
+				}
+				if evt.Type == "run_finished" {
+					return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "run.subscribe.complete", Data: map[string]any{"run_id": req.RunID}})
+				}
+			}
+		}
+	case "run.confirm":
+		if strings.TrimSpace(req.Input) == "" {
+			return fmt.Errorf("input is required")
+		}
+		if _, ok := s.runtime.getPendingConfirmation(sessionID); !ok {
+			return fmt.Errorf("no pending confirmation for session")
+		}
+		run, ok := s.runtime.runs.latestBySession(sessionID)
+		if !ok {
+			return fmt.Errorf("no run found for session")
+		}
+		go func(runID string) {
+			_, _ = s.runtime.runAgentLoopWithRun(context.Background(), run, sessionID, UserInput{Text: req.Input}, nil, run.Mode, runnerCallbacks{callChat: s.runtime.callChatWithTools})
+		}(run.ID)
+		return s.writeRemoteWS(writeMu, conn, remoteWSMessage{Type: "run.confirmed", Data: map[string]any{"session_id": sessionID, "run_id": run.ID, "input": req.Input}})
 	default:
 		return fmt.Errorf("unsupported remote message type: %s", req.Type)
 	}
