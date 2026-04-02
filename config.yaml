@@ -23,11 +23,11 @@ planner:
   #   - lmstudio: LM Studio local API (env: LMSTUDIO_API_KEY)
   #   - openai-compatible: Custom OpenAI-compatible API (env: OPENAI_COMPATIBLE_API_KEY)
   #   - builtin: Built-in keyword planner (no API key required)
-  provider: deepseek
-  model: deepseek-chat
+  provider: minimax
+  model: MiniMax-M2.5
   temperature: 0.2
-  api_key: ${DEEPSEEK_API_KEY}
-  # endpoint: https://api.minimax.io/v1/chat/completions (optional, defaults vary by provider)
+  api_key: ${MINIMAX_API_KEY}
+  endpoint: https://api.minimaxi.com
 
 server:
   listen: :8080
