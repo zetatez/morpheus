@@ -6,10 +6,10 @@ logging:
 
 planner:
   # Provider options: openai, minmax, glm, gemini, deepseek, builtin
-  provider: MiniMax
+  provider: minmax
   model: MiniMax-M2.7
   temperature: 0.2
-  api_key: ${MINMAX_API_KEY}
+  api_key: ${MINIMAX_API_KEY}
   # endpoint: https://api.minimax.io/anthropic/v1 (默认)
 
 server:
