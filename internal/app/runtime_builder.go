@@ -147,7 +147,12 @@ func (b *RuntimeBuilder) Build(ctx context.Context) (*Runtime, error) {
 	if soulPrompt, err := loadSoulPrompt(); err != nil {
 		logger.Warn("failed to load SOUL.md", zap.Error(err))
 	} else if soulPrompt != "" {
-		conv.SetSystemPrompt(pluginsVal.ApplySystem(plugin.SystemContext{SessionID: ""}, soulPrompt))
+		fullPrompt := soulPrompt
+		if contextFiles, err := loadContextFiles(b.cfg.WorkspaceRoot); err == nil && contextFiles != "" {
+			fullPrompt = soulPrompt + "\n\n" + contextFiles
+			logger.Info("context files loaded", zap.Int("chars", len(contextFiles)))
+		}
+		conv.SetSystemPrompt(pluginsVal.ApplySystem(plugin.SystemContext{SessionID: ""}, fullPrompt))
 		logger.Info("SOUL.md loaded", zap.Int("chars", len(soulPrompt)))
 	}
 

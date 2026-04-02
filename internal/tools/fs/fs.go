@@ -43,15 +43,18 @@ type EditTool struct {
 }
 
 type ListTool struct {
-	root string
+	root          string
+	ignoreChecker *IgnoreChecker
 }
 
 type GlobTool struct {
-	root string
+	root          string
+	ignoreChecker *IgnoreChecker
 }
 
 type GrepTool struct {
-	root string
+	root          string
+	ignoreChecker *IgnoreChecker
 }
 
 type RmTool struct {
@@ -67,7 +70,8 @@ type MvTool struct {
 }
 
 type TreeTool struct {
-	root string
+	root          string
+	ignoreChecker *IgnoreChecker
 }
 
 const defaultReadLimit = 200
@@ -131,8 +135,16 @@ func NewGlobTool(root string) *GlobTool {
 	return &GlobTool{root: root}
 }
 
+func NewGlobToolWithIgnore(root string, checker *IgnoreChecker) *GlobTool {
+	return &GlobTool{root: root, ignoreChecker: checker}
+}
+
 func NewGrepTool(root string) *GrepTool {
 	return &GrepTool{root: root}
+}
+
+func NewGrepToolWithIgnore(root string, checker *IgnoreChecker) *GrepTool {
+	return &GrepTool{root: root, ignoreChecker: checker}
 }
 
 func NewRmTool(root string) *RmTool {
@@ -149,6 +161,10 @@ func NewMvTool(root string) *MvTool {
 
 func NewTreeTool(root string) *TreeTool {
 	return &TreeTool{root: root}
+}
+
+func NewTreeToolWithIgnore(root string, checker *IgnoreChecker) *TreeTool {
+	return &TreeTool{root: root, ignoreChecker: checker}
 }
 
 func (t *ReadTool) Name() string       { return "fs.read" }
@@ -609,6 +625,9 @@ func (t *GlobTool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolRe
 		if err != nil {
 			continue
 		}
+		if t.ignoreChecker != nil && t.ignoreChecker.ShouldIgnore(m) {
+			continue
+		}
 		results = append(results, rel)
 	}
 	return sdk.ToolResult{
@@ -637,6 +656,9 @@ func (t *GrepTool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolRe
 			return nil
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if t.ignoreChecker != nil && t.ignoreChecker.ShouldIgnore(path) {
 			return nil
 		}
 		if include != "" {

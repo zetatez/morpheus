@@ -151,7 +151,12 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	if soulPrompt, err := loadSoulPrompt(); err != nil {
 		logger.Warn("failed to load SOUL.md", zap.Error(err))
 	} else if soulPrompt != "" {
-		conv.SetSystemPrompt(plugins.ApplySystem(plugin.SystemContext{SessionID: ""}, soulPrompt))
+		fullPrompt := soulPrompt
+		if contextFiles, err := loadContextFiles(cfg.WorkspaceRoot); err == nil && contextFiles != "" {
+			fullPrompt = soulPrompt + "\n\n" + contextFiles
+			logger.Info("context files loaded", zap.Int("chars", len(contextFiles)))
+		}
+		conv.SetSystemPrompt(plugins.ApplySystem(plugin.SystemContext{SessionID: ""}, fullPrompt))
 		logger.Info("SOUL.md loaded", zap.Int("chars", len(soulPrompt)))
 	}
 	reg := registry.NewRegistry()
@@ -268,6 +273,9 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 
 func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mcp.Manager) []sdk.Tool {
 	rtAgent := agenttool.New(nil)
+
+	ignoreChecker, _ := fstool.LoadIgnoreChecker(cfg.WorkspaceRoot)
+
 	return []sdk.Tool{
 		rtAgent,
 		agenttool.NewCoordinator(nil),
@@ -277,8 +285,8 @@ func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mc
 		fstool.NewReadTool(cfg.WorkspaceRoot),
 		fstool.NewWriteTool(cfg.WorkspaceRoot, cfg.Permissions.FileSystem.MaxWriteSizeKB),
 		fstool.NewEditTool(cfg.WorkspaceRoot, cfg.Permissions.FileSystem.MaxWriteSizeKB),
-		fstool.NewGlobTool(cfg.WorkspaceRoot),
-		fstool.NewGrepTool(cfg.WorkspaceRoot),
+		fstool.NewGlobToolWithIgnore(cfg.WorkspaceRoot, ignoreChecker),
+		fstool.NewGrepToolWithIgnore(cfg.WorkspaceRoot, ignoreChecker),
 		lsp.New(cfg.WorkspaceRoot),
 		mcp.NewControlTool(mcpManager),
 		skilltool.New(skills, nil),

@@ -479,7 +479,6 @@ func (rt *Runtime) replayRunEvents(ctx context.Context, runID string, afterSeq i
 			}
 		}
 	}
-	return nil
 }
 
 func (s *APIServer) handleRunByID(w http.ResponseWriter, r *http.Request) {
