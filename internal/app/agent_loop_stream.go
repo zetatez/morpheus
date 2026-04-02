@@ -67,6 +67,9 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 		"temperature": plannerCfg.Temperature,
 		"stream":      true,
 	}
+	if plannerCfg.Provider == "minmax" {
+		payload["max_tokens"] = 4096
+	}
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		if toolChoice != nil {
@@ -94,8 +97,11 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	switch plannerCfg.Provider {
-	case "openai", "glm", "minmax", "deepseek":
+	case "openai", "glm", "deepseek":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minmax":
+		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)

@@ -42,7 +42,7 @@ func NewPlanner(apiKey string, model string, temp float64, provider string, endp
 func defaultEndpoint(provider string) string {
 	switch provider {
 	case "minmax":
-		return "https://api.minimax.chat/v1/text/chatcompletion_v2"
+		return "https://api.minimax.io/anthropic/v1/messages"
 	case "glm":
 		return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 	case "gemini":

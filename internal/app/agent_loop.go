@@ -587,6 +587,9 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 	}
 
 	payload := map[string]any{"model": model, "messages": messages, "temperature": plannerCfg.Temperature}
+	if plannerCfg.Provider == "minmax" {
+		payload["max_tokens"] = 4096
+	}
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		if toolChoice != nil {
@@ -608,9 +611,13 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		return chatResponse{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	fmt.Printf("DEBUG callChatWithToolsStream: Provider=%q, APIKey=%q, Endpoint=%q\n", plannerCfg.Provider, plannerCfg.APIKey, endpoint)
 	switch plannerCfg.Provider {
-	case "openai", "glm", "minmax", "deepseek":
+	case "openai", "glm", "deepseek":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minmax":
+		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
@@ -625,6 +632,86 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 	if err != nil {
 		return chatResponse{}, err
 	}
+
+	var out chatResponse
+	var usage struct {
+		PromptTokens     int
+		CompletionTokens int
+		TotalTokens      int
+	}
+	if plannerCfg.Provider == "minmax" {
+		out, usage, err = parseAnthropicResponse(respBody)
+	} else {
+		out, usage, err = parseOpenAIResponse(respBody)
+	}
+	if err != nil {
+		return chatResponse{}, err
+	}
+
+	if rt.metrics != nil && usage.TotalTokens > 0 {
+		rt.metrics.addTokens(int64(usage.PromptTokens), int64(usage.CompletionTokens))
+		rt.metrics.addCost(calculateCost(usage.PromptTokens, usage.CompletionTokens, model, plannerCfg.Provider))
+	}
+	return out, nil
+}
+
+func parseAnthropicResponse(body []byte) (chatResponse, struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}, error) {
+	var result struct {
+		Content []struct {
+			Type  string         `json:"type"`
+			Text  string         `json:"text"`
+			ID    string         `json:"id"`
+			Name  string         `json:"name"`
+			Input map[string]any `json:"input"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return chatResponse{}, struct {
+			PromptTokens     int
+			CompletionTokens int
+			TotalTokens      int
+		}{}, err
+	}
+
+	out := chatResponse{FinishReason: result.StopReason}
+	usage := struct {
+		PromptTokens     int
+		CompletionTokens int
+		TotalTokens      int
+	}{
+		PromptTokens:     result.Usage.InputTokens,
+		CompletionTokens: result.Usage.OutputTokens,
+		TotalTokens:      result.Usage.InputTokens + result.Usage.OutputTokens,
+	}
+
+	for _, block := range result.Content {
+		if block.Type == "text" {
+			out.Content += block.Text
+		} else if block.Type == "tool_use" {
+			out.ToolCalls = append(out.ToolCalls, toolCall{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: block.Input,
+			})
+		}
+	}
+	return out, usage, nil
+}
+
+func parseOpenAIResponse(body []byte) (chatResponse, struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}, error) {
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -646,11 +733,19 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return chatResponse{}, err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return chatResponse{}, struct {
+			PromptTokens     int
+			CompletionTokens int
+			TotalTokens      int
+		}{}, err
 	}
 	if len(result.Choices) == 0 {
-		return chatResponse{}, fmt.Errorf("empty choices from model")
+		return chatResponse{}, struct {
+			PromptTokens     int
+			CompletionTokens int
+			TotalTokens      int
+		}{}, fmt.Errorf("empty choices from model")
 	}
 	choice := result.Choices[0]
 	out := chatResponse{Content: choice.Message.Content, FinishReason: choice.FinishReason}
@@ -661,11 +756,15 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		}
 		out.ToolCalls = append(out.ToolCalls, toolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args})
 	}
-	if rt.metrics != nil && result.Usage.TotalTokens > 0 {
-		rt.metrics.addTokens(int64(result.Usage.PromptTokens), int64(result.Usage.CompletionTokens))
-		rt.metrics.addCost(calculateCost(result.Usage.PromptTokens, result.Usage.CompletionTokens, model, plannerCfg.Provider))
-	}
-	return out, nil
+	return out, struct {
+		PromptTokens     int
+		CompletionTokens int
+		TotalTokens      int
+	}{
+		PromptTokens:     result.Usage.PromptTokens,
+		CompletionTokens: result.Usage.CompletionTokens,
+		TotalTokens:      result.Usage.TotalTokens,
+	}, nil
 }
 
 func normalizeToolName(name string) string {

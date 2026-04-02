@@ -142,6 +142,7 @@ func (c *Config) expandPaths() {
 	c.KnowledgeBase.Path = expandPath(c.KnowledgeBase.Path)
 	c.Planner.Endpoint = expandPath(c.Planner.Endpoint)
 	c.Planner.APIKey = expandEnvValue(c.Planner.APIKey)
+	c.Planner.Provider = strings.ToLower(c.Planner.Provider)
 	c.Server.Remote.BearerToken = expandEnvValue(c.Server.Remote.BearerToken)
 
 	c.loadAPIKeyFromEnv()

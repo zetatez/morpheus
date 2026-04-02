@@ -2346,8 +2346,11 @@ func (rt *Runtime) generateSummary(ctx context.Context, prompt string) (string, 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	switch plannerCfg.Provider {
-	case "openai", "glm", "minmax", "deepseek":
+	case "openai", "glm", "deepseek":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minmax":
+		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)
@@ -2362,6 +2365,24 @@ func (rt *Runtime) generateSummary(ctx context.Context, prompt string) (string, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+
+	if plannerCfg.Provider == "minmax" {
+		var result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return "", err
+		}
+		for _, block := range result.Content {
+			if block.Type == "text" && block.Text != "" {
+				return strings.TrimSpace(block.Text), nil
+			}
+		}
 		return "", nil
 	}
 
@@ -2865,7 +2886,7 @@ func defaultModel(provider string) string {
 func chatEndpoint(provider string) string {
 	switch provider {
 	case "minmax":
-		return "https://api.minimax.chat/v1/text/chatcompletion_v2"
+		return "https://api.minimax.io/anthropic/v1/messages"
 	case "glm":
 		return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 	case "gemini":

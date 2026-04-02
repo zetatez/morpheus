@@ -6,11 +6,11 @@ logging:
 
 planner:
   # Provider options: openai, minmax, glm, gemini, deepseek, builtin
-  provider: MinMax
-  model: MinMax-M2.7
+  provider: MiniMax
+  model: MiniMax-M2.7
   temperature: 0.2
-  api_key: ${MINMAX_API_KEY}
-  # endpoint: https://api.minimax.chat/v1/text/chatcompletion_v2 (默认)
+  api_key: ${MINIMAX_API_KEY}
+  # endpoint: https://api.minimax.io/anthropic/v1 (默认)
 
 server:
   listen: :8080
