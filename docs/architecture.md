@@ -24,10 +24,14 @@
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                      Runtime (4258行)                      │   │
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────┐            │   │
-│  │  │ AgentLoop  │ │ Coordinator│ │ MCP Manager│            │   │
+│  │  │ AgentLoop   │ │ Coordinator│ │ MCP Manager│            │   │
+│  │  │ (+Runner)   │ │            │ │            │            │   │
 │  │  └────────────┘ └────────────┘ └────────────┘            │   │
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────┐            │   │
-│  │  │  Planner   │ │ConvoManager│ │Skill Loader│            │   │
+│  │  │ ConvManager│ │ SkillLoader│ │SubagentLoad│            │   │
+│  │  └────────────┘ └────────────┘ └────────────┘            │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐            │   │
+│  │  │ PolicyEngine│ │ ToolRegistry│ │ TeamState  │            │   │
 │  │  └────────────┘ └────────────┘ └────────────┘            │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -47,7 +51,7 @@
 │                      Storage Layer                                 │
 │  ┌─────────────────────┐         ┌─────────────────────┐         │
 │  │   SQLite (WAL)      │         │   File System       │         │
-│  │   sessions.db       │         │   sessions/*.json   │         │
+│  │   sessions.db       │         │   sessions/*.md/*.json│        │
 │  └─────────────────────┘         └─────────────────────┘         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -108,6 +112,11 @@ type Runtime struct {
     skills           *skill.Loader
     agentRegistry    *AgentRegistry
     subagents        *subagent.Loader
+    // 内存状态
+    teamState        *TeamState
+    todos            *TodoState
+    checkpoints      map[string]*gitCheckpoint
+    sessionMemory    *sessionMemoryState
 }
 ```
 
@@ -121,46 +130,57 @@ newLogger → convo.NewManager → plugin.NewRegistry → loadSoulPrompt
 
 ### 4.2 AgentLoop — 迭代执行引擎
 
-**位置**: `internal/app/agent_loop.go`
+**位置**: `internal/app/agent_loop.go` + `agent_runner.go`
 
-核心循环，最多12步迭代：
+核心循环，最多12步迭代，采用**意图分类路由**：
 
 ```
 AgentLoop
-  ├─ getPendingConfirmation()    # 待确认操作
-  ├─ preprocessSkillCommand()     # @skill 命令预处理
-  ├─ appendMessage()              # 追加用户消息
-  ├─ allowMentionedSkills()       # 解析并启用引用的技能
-  ├─ checkAndCompress()           # 60k token 上下文压缩
-  ├─ collectToolSpecs()           # 收集可用工具
-  ├─ buildAgentMessages()         # 构建完整消息列表
-  ├─ maybeCoordinate()            # 多Agent协调检测
+  ├─ normalizeInput()              # 标准化输入，提取附件
+  ├─ classifyIntent()              # 意图分类
+  │   ├─ simple_chat              # 简短对话，无工具
+  │   ├─ lightweight_answer       # 通用知识，无需工具
+  │   ├─ fresh_info               # 需实时信息(web.fetch优先)
+  │   └─ tool_agent               # 完整工具循环
+  ├─ buildMessages()              # 构建消息链
+  │   ├─ System Prompt
+  │   ├─ Team Context
+  │   ├─ Context Documents
+  │   ├─ Long-term Memory
+  │   ├─ Short-term Memory
+  │   ├─ Route System Prompt
+  │   ├─ Conversation Summary
+  │   └─ User Message
   └─ Loop (maxAgentSteps=12):
       ├─ callChatWithTools()      # 调用LLM
       ├─ extractStructuredOutput() # 提取JSON输出
       ├─ For each tool_call:
-      │   ├─ normalizeToolName()
+      │   ├─ policy.Check()       # 权限检查
       │   ├─ orchestrator.ExecuteStep()
+      │   ├─ maybeCheckpoint()     # Git stash快照
       │   ├─ truncateToolResult()
       │   └─ appendMessage()
+      ├─ checkAndCompress()       # 上下文压缩
       └─ If finish_reason=="stop": break
 ```
 
-**Agent 运行模式**:
-
-- `build` - 完全访问权限（执行命令、写入文件）
-- `plan` - 只读模式（仅生成计划）
+**Intent Cache**: 每个session缓存32条意图分类结果
 
 ### 4.3 Coordinator — 多Agent编排器
 
 **位置**: `internal/app/coordinator.go`
 
 **触发条件**:
-
 - 输入 >= 12单词 且 包含换行/"then"/"and"/"also"
 - 或包含 "plan"/"architecture"/"review"
 
-**内置 Agent Profiles** (10个):
+**工作流**:
+1. 构建协调者计划（LLM生成JSON任务图）
+2. 任务分配角色：implementer, explorer, reviewer, architect, tester, devops, data, security, docs, shell-python-operator
+3. 并行或DAG执行（最大6任务，3并发）
+4. 汇总结果
+
+**内置 Agent Profiles** (9个):
 
 | Agent | 用途 |
 |-------|------|
@@ -173,10 +193,8 @@ AgentLoop
 | `data` | 数据管道工作 |
 | `security` | 安全漏洞评审 |
 | `docs` | 创建文档 |
-| `shell-python-operator` | Shell 管道和 Python 脚本 |
 
 **DAG 调度**:
-
 - 支持 `depends_on` 依赖声明
 - 自动拓扑排序
 - 最大3个并发任务
@@ -204,7 +222,7 @@ ExecuteStep
   ├─ registry.Get(step.Tool) → 获取工具实例
   ├─ checkPolicy() → 策略评估
   │   ├─ cmd.exec → EvaluateCommand(command, workdir)
-  │   └─ fs.* → EvaluateCommand(tool, path)
+  │   └─ fs.* → EvaluatePath(tool, path)
   ├─ ApplyToolBefore() → 插件前置钩子
   ├─ tool.Invoke() → 执行工具
   └─ ApplyToolAfter() → 插件后置钩子
@@ -258,10 +276,16 @@ ExecuteStep
 
 `@review`, `@test`, `@docs`, `@refactor`, `@debug`, `@security`, `@git`, `@explain`, `@optimize`
 
-**自定义技能位置**:
+**自定义技能位置** (按优先级):
 
-- `~/.config/morpheus/skills/`
-- `.morpheus/skills/`
+1. `~/.config/morpheus/skills/`
+2. `~/.config/opencode/skills/`
+3. `~/.claude/skills/`
+4. `~/.agents/skills/`
+5. `.morpheus/skills/` (项目级)
+6. `.opencode/skills/` (项目级)
+7. `.claude/skills/` (项目级)
+8. `.agents/skills/` (项目级)
 
 ### 4.8 Session Management — 会话管理
 
@@ -269,14 +293,24 @@ ExecuteStep
 
 双后端存储：
 
-- **SQLite**: `sessions.db`，WAL 模式
-- **File**: JSON 文件在 sessions 目录
+- **SQLite**: `sessions.db`，WAL 模式，事件溯源
+- **File**: Markdown + JSON 文件在 sessions 目录
+
+**内存状态**:
+```go
+type sessionMemoryState struct {
+    shortTerm string  // 工作上下文 (max 4000 bytes)
+    longTerm  string  // 持久上下文 (max 12000 bytes)
+}
+```
 
 **数据库 Schema**:
 
 ```sql
 sessions(id, created_at, updated_at, summary, metadata_json)
 messages(id, session_id, idx, role, content, parts_json, timestamp)
+runs(id, session_id, status, created_at, metadata_json)
+run_events(id, run_id, seq, type, data_json)
 ```
 
 ### 4.9 MCP Protocol — MCP 协议客户端
@@ -288,6 +322,8 @@ messages(id, session_id, idx, role, content, parts_json, timestamp)
 - **stdio**: 本地进程通信
 - **HTTP**: 远程服务器，支持 SSE
 - **Auth**: Bearer Token 认证
+
+**工具命名**: `mcp.{server}.{tool}` (e.g., `mcp.filesystem.read`)
 
 ### 4.10 Plugin System — 插件系统
 
@@ -304,9 +340,101 @@ type Registry struct {
 }
 ```
 
+### 4.11 Checkpoint System — Git快照机制
+
+**位置**: `internal/app/runtime.go:618-740`
+
+基于 `git stash` 的代码状态快照：
+
+- 每次工具执行后可自动创建checkpoint
+- 支持回滚到指定checkpoint
+- 使用 `git stash push -u` 保留未跟踪文件
+
 ---
 
-## 五、配置管理
+## 五、上下文管理
+
+### 5.1 Token阈值常量
+
+```go
+const (
+    MaxHistoryTokens        = 60000   // 最大历史token
+    CompactionReserveTokens = 20000   // 压缩摘要预留
+    PruneMinimumTokens     = 20000   // 最小修剪token
+    PruneProtectTokens     = 40000   // 修剪保护token
+    CompactionCooldown     = 2 * time.Minute
+    CompactionTriggerRatio = 0.95     // 95%
+)
+```
+
+### 5.2 两阶段压缩
+
+1. **Prune**: 当 total > 40000 tokens 时，移除已完成非失败步骤的工具输出
+2. **Compress**: 当 remaining > 57000 tokens (95% of 60000) 时，总结最旧消息
+
+### 5.3 消息构建顺序
+
+1. System prompt
+2. Team shared context
+3. Context documents
+4. Long-term memory
+5. Short-term memory
+6. Route-specific system prompt (tool agent vs lightweight)
+7. Conversation summary
+8. User message
+
+---
+
+## 六、REST API
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/api/v1/chat` | 与 Agent 聊天 |
+| POST | `/api/v1/plan` | 生成计划 |
+| POST | `/api/v1/execute` | 执行计划 |
+| POST | `/api/v1/tasks` | 创建任务 |
+| GET | `/api/v1/tasks/{id}` | 获取任务状态 |
+| GET | `/api/v1/sessions` | 列出会话 |
+| GET | `/api/v1/sessions/{id}` | 获取会话 |
+| GET | `/api/v1/skills` | 列出技能 |
+| POST | `/api/v1/models/select` | 切换模型 |
+| GET | `/api/v1/models` | 列出模型 |
+| POST | `/repl` | REPL 端点 |
+| POST | `/repl/stream` | 流式 REPL |
+
+---
+
+## 七、Agent 类型
+
+### 7.1 内置 Agent Profiles
+
+| Profile | 工具权限 | 用途 |
+|---------|----------|------|
+| `implementer` | 全部 | 交付代码变更 |
+| `explorer` | 只读 | 调查代码库 |
+| `reviewer` | 只读 | 代码评审 |
+| `architect` | 只读 | 架构设计 |
+| `tester` | 写文件 | 测试编写 |
+| `devops` | shell | 部署CI/CD |
+| `data` | 数据工具 | 数据管道 |
+| `security` | 只读 | 安全评审 |
+| `docs` | 写文件 | 文档编写 |
+
+### 7.2 自定义 Subagent
+
+从 `SUBAGENT.md` 文件加载 YAML frontmatter 定义：
+
+```yaml
+name: CustomAgent
+description: Description
+tools: [fs.read, cmd.exec]
+---
+Instructions here...
+```
+
+---
+
+## 八、配置管理
 
 **位置**: `config.yaml`
 
@@ -348,6 +476,9 @@ permissions:
   confirm_protected_paths: [...]
   risk_factors: {...}
   auto_approve: false
+
+subagents:
+  max_concurrent_tasks: 3
 ```
 
 **配置优先级**:
@@ -358,315 +489,52 @@ permissions:
 
 ---
 
-## 六、REST API
+## 九、已改进问题
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/api/v1/chat` | 与 Agent 聊天 |
-| POST | `/api/v1/plan` | 生成计划 |
-| POST | `/api/v1/execute` | 执行计划 |
-| POST | `/api/v1/tasks` | 创建任务 |
-| GET | `/api/v1/tasks/{id}` | 获取任务状态 |
-| GET | `/api/v1/sessions` | 列出会话 |
-| GET | `/api/v1/sessions/{id}` | 获取会话 |
-| GET | `/api/v1/skills` | 列出技能 |
-| POST | `/api/v1/models/select` | 切换模型 |
-| GET | `/api/v1/models` | 列出模型 |
-| POST | `/repl` | REPL 端点 |
-| POST | `/repl/stream` | 流式 REPL |
-
----
-
-## 七、优势分析
-
-### 7.1 架构设计优秀
-
-1. **清晰的关注点分离**
-   - Runtime 作为协调者，各子组件职责单一
-   - Tool Registry 模式便于扩展
-   - Plugin Hook 机制支持无侵入增强
-
-2. **多层次的可扩展性**
-   - Tools: 实现 `sdk.Tool` 接口即可添加新工具
-   - Plugins: 消息、系统提示、工具前后钩子
-   - Skills: 懒加载的技能系统
-   - Subagents: 自定义 Agent profile
-
-3. **安全第一的设计**
-   - Policy Engine 实现细粒度风险评估
-   - Protected paths 保护系统敏感区域
-   - 分级确认机制 (confirm_above 配置)
-
-### 7.2 功能完整性
-
-1. **MCP 协议完整支持** — stdio/HTTP/SSE 三种传输方式
-2. **多 LLM Provider 支持** — 覆盖 OpenAI 系、本地 Ollama、SambaNova 等 20+ 提供商
-3. **混合存储** — SQLite WAL + JSON 文件，双重保障
-4. **智能上下文压缩** — 60k token 阈值自动触发
-5. **DAG 任务调度** — 多 Agent 协作有依赖管理
-
-### 7.3 工程化水平
-
-1. **配置驱动** — Viper 支持多源配置和环境变量
-2. **结构化日志** — zap logger 带上下文
-3. **错误处理规范** — 统一的错误类型和传播
-4. **TUI + API 双入口** — 兼顾交互和程序化使用
-
----
-
-## 八、已改进问题
-
-### 8.1 Runtime 单点问题 ✅ 已优化
+### 9.1 Runtime 单点问题 ✅ 已优化
 
 - 引入 `RuntimeOption` 选项模式，支持依赖注入
 - 便于测试时替换实现（`WithPlanner`, `WithOrchestrator` 等）
 - 文件: `internal/app/lazy.go`
 
-### 8.2 初始化链路过重 ✅ 已优化
+### 9.2 初始化链路过重 ✅ 已优化
 
 - 引入 `Lazy[T]` 泛型，支持按需初始化
 - 使用 `sync.Once` 保证线程安全
 - 文件: `internal/app/lazy.go`
 
-### 8.3 并发模型简单 ✅ 已优化
+### 9.3 并发模型简单 ✅ 已优化
 
 - 引入 `WorkerPool`，可配置并发数
 - 工具调用支持并行执行
 - Coordinator 并发上限可配置化 (`max_concurrent_tasks`)
 - 文件: `internal/exec/worker_pool.go`, `internal/app/coordinator.go`
 
-### 8.3.1 Coordinator 并发上限可配置化 ✅
-
-**文件**: `internal/app/coordinator.go`
-
-```go
-maxConcurrent := rt.cfg.Agent.MaxConcurrentTasks
-if maxConcurrent <= 0 {
-    maxConcurrent = 3
-}
-limit := make(chan struct{}, maxConcurrent)
-```
-
-配置项: `subagents.max_concurrent_tasks`，默认值为 3。
-
-### 8.4 会话管理耦合 ✅ 已优化
+### 9.4 会话管理耦合 ✅ 已优化
 
 - 抽象 `SessionStore` 接口，职责边界清晰
 - 支持多种存储后端替换（SQLite/File）
 - SQLite 连接池管理（`NewStoreWithPool`）
 - 文件: `internal/session/store.go`, `internal/session/store_sqlite.go`
 
-### 8.4.1 SQLite 连接池管理 ✅
-
-**文件**: `internal/session/store_sqlite.go`
-
-```go
-func NewStoreWithPool(path string, maxOpenConns int) (*Store, error) {
-    dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)", path)
-    db.SetMaxOpenConns(maxOpenConns)
-    db.SetMaxIdleConns(maxOpenConns / 2)
-    db.SetConnMaxLifetime(5 * time.Minute)
-}
-```
-
-### 8.5 错误处理不一致 ✅ 已优化
+### 9.5 错误处理不一致 ✅ 已优化
 
 - 引入 `Result[T]` 统一结果类型
 - `ToolError` 提供标准化错误信息
 - `ExecutionMetrics` 统一执行指标
 - 文件: `pkg/sdk/result.go`
 
-### 8.6 配置管理分散 ✅ 已优化
+### 9.6 配置管理分散 ✅ 已优化
 
 - `ValidateAll()` 提供全量配置验证
 - 各子配置独立验证函数
 - 文件: `internal/config/validation.go`
 
-### 8.6.1 配置热更新机制 ✅
+### 9.7 配置热更新机制 ✅ 已优化
 
 **文件**: `internal/config/hotreload.go`
 
-```go
-type HotReloader interface {
-    Reload(cfg Config) error
-}
-
-type ConfigWatcher struct {
-    viper    *viper.Viper
-    path     string
-    reloader HotReloader
-}
-
-func (w *ConfigWatcher) Start(ctx context.Context) error
-func (w *ConfigWatcher) checkAndReload()
-func (w *ConfigWatcher) Stop()
-```
-
 支持 fsnotify 文件监控 + 定时轮询两种模式。
-
----
-
-## 九、优化记录
-
-### 9.1 重构 Runtime — 引入依赖注入 ✅
-
-**文件**: `internal/app/lazy.go`, `internal/app/runtime_builder.go`
-
-```go
-type RuntimeOption func(*Runtime)
-
-func WithPlanner(p sdk.Planner) RuntimeOption {
-    return func(r *Runtime) { r.planner = p }
-}
-
-func WithConversationManager(c *convo.Manager) RuntimeOption {
-    return func(r *Runtime) { r.conversation = c }
-}
-
-func WithOrchestrator(o *execpkg.Orchestrator) RuntimeOption {
-    return func(r *Runtime) { r.orchestrator = o }
-}
-```
-
-**RuntimeBuilder** 提供构造时注入和懒加载支持：
-
-```go
-type RuntimeBuilder struct {
-    planner     *Lazy[sdk.Planner]
-    orchestrator *Lazy[*execpkg.Orchestrator]
-    // ...
-}
-
-func NewRuntimeBuilder(cfg config.Config) *RuntimeBuilder
-func (b *RuntimeBuilder) WithPlannerProvider(p sdk.Planner) *RuntimeBuilder
-func (b *RuntimeBuilder) Build(ctx context.Context) (*Runtime, error)
-```
-
-### 9.2 懒加载所有组件 ✅
-
-**文件**: `internal/app/lazy.go`
-
-```go
-type Lazy[T any] struct {
-    init func() T
-    val  T
-    once sync.Once
-}
-
-func NewLazy[T any](init func() T) *Lazy[T] {
-    return &Lazy[T]{init: init}
-}
-
-func (l *Lazy[T]) Get() T {
-    l.once.Do(func() { l.val = l.init() })
-    return l.val
-}
-```
-
-### 9.3 引入 Worker Pool 并发模型 ✅
-
-**文件**: `internal/exec/worker_pool.go`
-
-```go
-type WorkerPool struct {
-    workers int
-    sem     chan struct{}
-    wg      sync.WaitGroup
-}
-
-func NewWorkerPool(workers int) *WorkerPool
-
-func (wp *WorkerPool) ExecuteToolCalls(
-    ctx context.Context,
-    calls []ToolCallInput,
-    executor func(context.Context, ToolCallInput) sdk.ToolResult,
-) []sdk.ToolResult
-```
-
-### 9.4 统一结果类型 ✅
-
-**文件**: `pkg/sdk/result.go`
-
-```go
-type Result[T any] struct {
-    Value   T
-    Error   *ToolError
-    Metrics ExecutionMetrics
-}
-
-type ToolError struct {
-    Code      ErrorCode
-    Message   string
-    Retryable bool
-}
-
-type ExecutionMetrics struct {
-    StartTime  time.Time
-    EndTime    time.Time
-    DurationMS int64
-    TokensUsed int
-    ModelName  string
-    ToolName   string
-    StepID     string
-}
-```
-
-### 9.5 配置集中 + Schema 验证 ✅
-
-**文件**: `internal/config/validation.go`
-
-```go
-func ValidatePlannerConfig(cfg PlannerConfig) error
-func ValidateServerConfig(cfg ServerConfig) error
-func ValidatePermissions(cfg Permissions) error
-func ValidateSessionConfig(cfg SessionConfig) error
-func (c Config) ValidateAll() error
-```
-
-### 9.6 指标与可观测性 ✅
-
-**文件**: `internal/app/telemetry.go`
-
-```go
-type Tracer interface {
-    StartSpan(ctx context.Context, name string, attrs ...zap.Field) (context.Context, Span)
-    RecordMetric(name string, value float64, attrs ...zap.Field)
-}
-
-type TelemetryMetrics struct {
-    ToolCallsTotal   atomic.Int64
-    ToolCallsSuccess atomic.Int64
-    ToolCallsFailed  atomic.Int64
-    ActiveAgents     atomic.Int64
-    TotalTokensUsed  atomic.Int64
-    AvgLatencyMS     atomic.Int64
-}
-
-func (m *TelemetryMetrics) RecordToolCall(success bool, latencyMS float64)
-func (m *TelemetryMetrics) RecordTokens(contextTokens, generationTokens int64)
-```
-
-### 9.7 会话存储抽象 ✅
-
-**文件**: `internal/session/store.go`
-
-```go
-type SessionStore interface {
-    Save(ctx context.Context, s *Session) error
-    Get(ctx context.Context, id string) (*Session, error)
-    List(ctx context.Context, filter *SessionFilter) ([]*Session, error)
-    Has(ctx context.Context, id string) bool
-    Close() error
-}
-
-type SessionBackend interface {
-    SaveSession(ctx context.Context, sessionID string, messages []sdk.Message, summary string, meta Metadata) error
-    ListSessions(ctx context.Context, query string) ([]Metadata, error)
-    LoadSession(ctx context.Context, sessionID string) (StoredSession, error)
-    HasSession(ctx context.Context, sessionID string) bool
-    Close() error
-}
-```
 
 ---
 
@@ -691,19 +559,23 @@ type SessionBackend interface {
 | Runtime | `internal/app/runtime.go` |
 | Runtime Builder | `internal/app/runtime_builder.go` |
 | Runtime Options (DI) | `internal/app/lazy.go` |
-| Telemetry | `internal/app/telemetry.go` |
-| AgentLoop | `internal/app/agent_loop.go` |
+| Agent Loop | `internal/app/agent_loop.go` |
+| Agent Runner | `internal/app/agent_runner.go` |
 | Coordinator | `internal/app/coordinator.go` |
+| Team State | `internal/app/agent_team.go` |
 | Orchestrator | `internal/exec/orchestrator.go` |
 | Worker Pool | `internal/exec/worker_pool.go` |
 | Policy Engine | `internal/policy/engine.go` |
 | Tool Registry | `internal/tools/registry/registry.go` |
-| Session Store (抽象) | `internal/session/store.go` |
-| Session SQLite | `internal/session/store_sqlite.go` |
-| Session Writer | `internal/session/writer.go` |
-| Skills | `internal/skill/loader.go` |
 | MCP | `internal/tools/mcp/mcp.go` |
+| Skills | `internal/skill/loader.go` |
+| Subagents | `internal/subagent/loader.go` |
+| Session Writer | `internal/session/writer.go` |
+| Session Store | `internal/session/store.go` |
+| Session SQLite | `internal/session/store_sqlite.go` |
 | Plugin | `internal/plugin/registry.go` |
+| Conversation | `internal/convo/manager.go` |
+| Todos | `internal/app/todos.go` |
 | Config | `internal/config/` |
 | Config Validation | `internal/config/validation.go` |
 | Config Hot Reload | `internal/config/hotreload.go` |

@@ -1,522 +1,451 @@
 # Morpheus 架构差距分析报告
 
-本文档对比 Morpheus 与当前业界领先 AI 编码助手（Claude Code、OpenCode、 Gemini-CLI、OpenAI Codex）的架构实现，识别功能差距并提出改进建议。
+## 1. 三者架构对比总览
 
-## 1. 架构对比总览
-
-  | 维度           | Morpheus            | Claude Code          | OpenCode               | Gemini-CLI        | Codex          |
-  | ------         | ----------          | -------------        | ----------             | ------------      | -------        |
-  | **开源协议**   | MIT                 | 专有                 | Apache 2.0             | Apache 2.0        | 专有           |
-  | **架构模式**   | 多 Agent 协调       | 多 Agent 协调        | 双 pipeline + 多 Agent | ReAct loop + 并行 | Agent 模式     |
-  | **模型支持**   | 6 + builtin         | Claude only          | 75+                    | Gemini only       | GPT-5 系列     |
-  | **持久化**     | SQLite + 文件       | SQLite               | SQLite                 | 文件 + Session    | SQLite         |
-  | **上下文管理** | 智能 token 压缩     | CLAUDE.md + 自动压缩 | Auto Compact 95%       | GEMINI.md         | AGENTS.md      |
-  | **工具协议**   | MCP (已实现)        | MCP (开放标准)       | MCP                    | MCP + Extensions  | MCP            |
-  | **插件系统**   | 基础钩子            | Skills + Plugins     | 30+ 自定义工具         | Extensions        | Plugins        |
-  | **Agent 类型** | 多 Profile + 自定义 | 单一 + 子 Agent      | Plan/Build + 自定义    | 单一              | Agent 模式切换 |
-  | **Skills**     | 9 内置 + Lazy Load  | Bundled Skills       | Skills                 | Skills            | Skills         |
-  | **权限控制**   | 策略引擎 + 交互确认 | 细粒度权限           | 工具级别权限           | 确认机制          | Approval modes |
-  | **TUI**        | OpenTUI             | 原生 TUI             | 原生 TUI               | 原生 TUI          | 原生 TUI       |
-  | **平台**       | macOS/Linux         | 全平台               | 全平台                 | 全平台            | macOS/Linux    |
+ | 维度           | Morpheus           | Claude Code      | OpenCode           |
+ | ------         | ----------         | -------------    | ----------         |
+ | **开源协议**   | MIT                | 专有             | Apache 2.0         |
+ | **代码规模**   | ~50K Go            | 512K TypeScript  | ~130K TypeScript   |
+ | **架构模式**   | Go后端+TS前端      | TS全栈 (Bun)     | TS全栈 (Bun)       |
+ | **运行时**     | Go 1.25            | Bun              | Bun                |
+ | **模型支持**   | 15+ providers      | Claude only      | 75+ providers      |
+ | **持久化**     | SQLite + 文件      | SQLite           | SQLite             |
+ | **上下文窗口** | 依赖模型           | 1M (Sonnet)      | 依赖模型           |
+ | **压缩策略**   | 60K token 阈值     | 多层自适应压缩   | 95% 压缩           |
+ | **工具协议**   | MCP (完整)         | MCP (开放标准)   | MCP                |
+ | **Agent架构**  | Coordinator + DAG  | Subagent + Teams | Primary + Subagent |
+ | **Skills系统** | 9内置 + Lazy Load  | Bundled Skills   | Skills             |
+ | **权限控制**   | 4级风险 + 策略引擎 | Hook Chain + 6层 | Pattern-based      |
+ | **TUI**        | OpenTUI (Solid.js) | 原生 Ink TUI     | 原生 TUI           |
+ | **平台**       | macOS/Linux        | 全平台           | 全平台             |
 
 ---
 
-## 2. 竞品深度分析
+## 2. Claude Code 深度分析（源码泄露）
 
-### 2.1 Claude Code (Anthropic)
+### 2.1 五层架构
 
-**最新特性 (2025-2026)**:
-- **Agent Teams**: 多会话协调，共享任务和 P2P 消息
-- **Subagents**: 可配置子 Agent，支持隔离上下文
-- **Background Agents**: 子 Agent 并行运行，不阻塞主对话
-- **/btw 命令**: 2026年3月发布，可在不破坏对话历史的情况下提问
-- **Remote Control**: 从 Claude.ai 或 Claude App 远程控制
-- **Bare Mode**: 最小化模式，跳过自动发现以加速脚本调用
-- **Planning Mode**: 结构化项目规划，目标设定和风险识别
-- **Checkpoints**: 自动代码状态快照，便于回滚
-- **Hooks**: 生命周期自动化钩子，HTTP hooks (2026年2月)
-- **Plugins**: 可分享的包，含斜杠命令、MCP 服务器、agents、hooks
-- **模型**: Sonnet 4.6 (默认), Opus 4.6, Haiku 4.5
-- **1M token 上下文**: Sonnet 4.6 支持扩展思考和自适应思考
-- **MCP**: 支持远程 MCP 服务器和 OAuth 认证
-- **GitHub 集成**: `/pr-comments` 获取 PR 评论
-- **多工作目录**: `--add-dir` 添加额外工作目录
-- **工作树隔离**: `--worktree` 在独立 git worktree 中运行
-- **VS Code 扩展**: 原生 IDE 集成 (beta)
-
-**权限系统**:
 ```
-Hook Chain:
-PreToolUse → Permissions → Execute
-            → PostToolUse
-
-Permissions:
-- Allow/Deny per tool
-- Confirmation for sensitive ops
-- Rate limiting
+┌─────────────────────────────────────────────────────────┐
+│  入口层 (Entrypoints)                                   │
+│  CLI、桌面端、网页、IDE插件、SDK 统一路由               │
+├─────────────────────────────────────────────────────────┤
+│  运行层 (Runtime)                                       │
+│  TAOR 循环 (Think→Act→Observe→Repeat) + Hook 系统       │
+├─────────────────────────────────────────────────────────┤
+│  引擎层 (Engine) — 46,000 行                            │
+│  QueryEngine 单例：数百个提示碎片动态拼装               │
+│  安全守则 5,677 token                                   │
+├─────────────────────────────────────────────────────────┤
+│  工具与能力层 (Tools & Caps)                            │
+│  40 个隔离工具单元，工具基类 29,000 行                  │
+├─────────────────────────────────────────────────────────┤
+│  基础设施层 (Infrastructure)                            │
+│  14 个缓存断点、远程 kill switch (GrowthBook)           │
+└─────────────────────────────────────────────────────────┘
 ```
 
-**CLI 引用**:
-```bash
-claude                    # 交互模式
-claude "query"            # 带初始提示
-claude -p "query"         # 单次查询模式
-claude --resume [id]      # 恢复会话
-claude --model claude-opus-4-6
-claude --max-turns 50
-claude --dangerously-skip-permissions
-claude --bare -p "query"
+### 2.2 Claude Code 核心机制
+
+#### Agentic Loop 五步流水线
+
+```
+Snip → 微压缩 → 上下文折叠 → 自动压缩 → 组装请求
 ```
 
-### 2.2 OpenCode (Anomaly)
+**关键优化**：
+- **流式工具执行**：模型输出时并行准备工具调用
+- **Fallback 机制**：主模型失败用 tombstone 消息清理孤儿 partial thinking blocks
+- **用户中断处理**：为未完成 tool_use block 补 error 类型 tool_result
 
-**最新特性 (2026)**:
-- **100% 开源**: Apache 2.0 许可证 (131K stars)
-- **模型无关**: 支持 75+ LLM 提供商
-- **客户端/服务器架构**: 可远程控制
-- **原生 LSP 支持**: 自动语言服务器集成
-- **多会话**: 并行运行多个 Agent
-- **分享链接**: 分享会话链接供调试
-- **GitHub Copilot 集成**: 使用 Copilot 账号
-- **Zen 服务**: 优化和基准测试的精选模型
-- **TUI Mission Control**: v1.3.3 任务控制中心
-- **Event-sourced Syncing**: 事件源同步
-- **Desktop App (beta)**: macOS/Windows/Linux + IDE 扩展
-- **OpenCode Zen**: 精选编码代理模型
+#### 多层上下文压缩
 
-**内置 Agent**:
- | Agent   | 用途              |
- | ------- | ------            |
- | build   | 全权限开发 (默认) |
- | plan    | 只读分析和规划    |
- | general | 通用子 Agent      |
- | explore | 快速代码探索      |
+| 层级 | 触发条件 | 特点 |
+|------|----------|------|
+| **微压缩** | 工具结果太长 | 就地缩减，用户透明 |
+| **自动压缩** | token > 窗口-20K | 阈值 = 窗口-20K (p99.99输出17K) |
+| **会话记忆压缩** | 跨压缩边界 | 保留关键约束 |
+| **上下文折叠** | 实验性 | 折叠优先于压缩 |
 
-**配置示例**:
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "agent": {
-    "review": {
-      "mode": "subagent",
-      "description": "Reviews code for best practices",
-      "tools": {
-        "write": false,
-        "edit": false
-      }
-    }
-  }
-}
+**CLAUDE.md 特殊地位**：四层加载（组织→用户→项目→本地），不受压缩影响。
+
+#### 六层权限防线（useCanUseTool.tsx）
+
+```
+1. 项目/用户配置白名单
+        ↓
+2. 自动模式分类器（yoloClassifier.ts）
+        ↓
+3. 协调者门控
+        ↓
+4. Swarm 工作者门控
+        ↓
+5. Bash 安全分类器（23 条规则）
+        ↓
+6. 用户确认
 ```
 
-**Skills 配置**:
+**cch Attestation**：Bun/Zig 层计算哈希认证，JS 层无法伪造，`DISABLE_TELEMETRY=1` 仍无法关闭。
+
+#### 三层记忆系统
+
+| 层级 | 类比 | 机制 |
+|------|------|------|
+| **Semantic** | 长期语义记忆 | 高信号内容写入，矛盾剔除，RAG检索 |
+| **Episodic** | 情景记忆 | 时间索引，按需检索 |
+| **Working** | 工作记忆 | 超限用指针代替内容 |
+
+**Reflection 机制**：任务成功率 60% → 85%，代价是多一轮 API 调用。
+
+### 2.3 Claude Code 独特功能
+
+| 功能 | 描述 |
+|------|------|
+| **KAIROS** | 持续后台代理模式（feature flag），每几秒主动检查，24h不间断 |
+| **Undercover Mode** | 内部员工提开源PR时自动激活，剥离所有AI标识 |
+| **反蒸馏** | `ANTI_DISTILLATION_CC=1` 时注入假工具定义 |
+| **Auto-Dream** | 每24h或5次会话后fork子代理整合记忆 |
+| **Capybara** | 内部模型代号，v8 false-claims rate 29-30% |
+| **Tengu** | 内部项目代号，所有analytics event以`tengu_`开头 |
+| **Buddy System** | 虚拟宠物，hash(userId)确定性生成 |
+
+### 2.4 Claude Code 启发
+
+**核心洞见**：6400行 AI 交互代码，50万行工程基础设施。
+
+- **代码约束 > prompt 约束**：工具注册层面硬约束比 prompt 指导可靠
+- **安全是纵深**：每层独立失败，任何一层发现问题就停
+- **架构服务于成本**：14个缓存断点、20K预留token——每次缓存失效都要花真实的钱
+
+---
+
+## 3. OpenCode 架构分析
+
+### 3.1 技术栈
+
+| 层级 | 技术选型 |
+|------|----------|
+| 运行时 | Bun, Node.js |
+| 前端框架 | SolidJS + SolidStart |
+| 后端框架 | Hono |
+| 数据库 | SQLite (本地), PlanetScale MySQL (云端) |
+| ORM | Drizzle ORM |
+| 依赖注入 | Effect (函数式 Effect 系统) |
+| AI 集成 | AI SDK (统一 AI provider 接口) |
+| 桌面端 | Tauri (Rust), Electron |
+
+### 3.2 核心架构模式
+
+#### Effect-based Dependency Injection
+
+```typescript
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const auth = yield* Auth.Service
+  }),
+)
+```
+
+**优点**：编译时类型安全、组合式 Layer 设计、更好的错误处理
+**缺点**：学习曲线陡峭、Effect 生态相对小众、调试困难
+
+#### Instance-based Multi-tenancy
+
+每个项目目录对应一个 `Instance`，实现状态隔离：
+
+```typescript
+Instance.provide(() => {
+  const state = InstanceState.make()
+  // per-directory isolated state
+})
+```
+
+### 3.3 OpenCode 独特功能
+
+| 功能 | 描述 |
+|------|------|
+| **Zen 服务** | 优化和基准测试的精选模型 |
+| **多会话并行** | 并行运行多个 Agent |
+| **分享链接** | 分享会话链接供调试 |
+| **Event-sourced Syncing** | 事件源同步 |
+| **Desktop App** | macOS/Windows/Linux + IDE 扩展 |
+
+---
+
+## 4. Morpheus 能力矩阵
+
+### 4.1 已实现功能 ✅
+
+| 功能 | 实现细节 |
+|------|----------|
+| **Agentic Loop** | 5步预处理流水线（输入→意图分类→消息构建→LLM调用→工具执行） |
+| **意图分类路由** | simple_chat / lightweight_answer / fresh_info / tool_agent |
+| **多Agent协调** | Coordinator + DAG调度，最大6任务/3并发 |
+| **内置Agent Profiles** | 9种：implementer, explorer, reviewer, architect, tester, devops, data, security, docs |
+| **MCP协议** | stdio/HTTP/SSE三种传输，完整工具发现和资源订阅 |
+| **Skills系统** | 9内置 + 8种路径懒加载，支持allowed-tools限制 |
+| **自定义Subagent** | SUBAGENT.md YAML定义，工具权限配置 |
+| **Policy Engine** | 4级风险评估（low/medium/high/critical）+ 保护路径 |
+| **Git Checkpoint** | git stash快照，回滚机制 |
+| **上下文压缩** | 60K token阈值，两阶段（prune + compress） |
+| **Session存储** | SQLite WAL + 文件双后端，事件溯源 |
+| **Memory管理** | short-term (4KB) + long-term (12KB) |
+| **Plugin Hooks** | Message/System/ToolBefore/ToolAfter 四种钩子 |
+| **Todo跟踪** | 内置todo.write工具 |
+| **结构化输出** | JSON schema解析 |
+| **SSE流式** | /repl/stream端点 |
+| **多模型支持** | 15+ provider (OpenAI/DeepSeek/MiniMax/GLM/Gemini/Anthropic/...) |
+| **远程控制** | WebSocket远程连接（server.remote.enabled） |
+| **热更新配置** | fsnotify + 定时轮询 |
+
+### 4.2 Morpheus 独占优势
+
+| 功能 | 优势 |
+|------|------|
+| **多Agent协调（DAG）** | 任务分解+拓扑排序+并行执行，比Claude Code更灵活 |
+| **意图分类路由** | 减少不必要的工具调用，降低token消耗 |
+| **Git Checkpoint** | 完整的代码状态快照，比Claude Code的checkpoints更底层 |
+| **内置Agent Profiles** | 9种预定义角色，开箱即用 |
+| **多路径Skills加载** | 兼容OpenCode/Claude生态 |
+| **Subagent文件定义** | 支持SUBAGENT.md声明式配置 |
+| **Plugin Hook系统** | 四种钩子支持无侵入增强 |
+
+### 4.3 待实现/差距
+
+| 功能 | Morpheus现状 | Claude Code实现 |
+|------|-------------|-----------------|
+| **项目上下文文件** | ❌ 无 | .claude.md 四层加载 |
+| **全局上下文文件** | ❌ 无 | ~/.claude.md |
+| **自动记忆提取** | ❌ Basic | Auto Memory + Dream |
+| **多层记忆系统** | ❌ 2层 | Semantic/Episodic/Working 3层 |
+| **Reflection机制** | ❌ 无 | 自省环节，成功率+25% |
+| **细粒度Bash安全** | ❌ 23种规则 | 23种规则 + 语义分析 |
+| **原生客户端认证** | ❌ 无 | cch Attestation (Bun/Zig) |
+| **卧底模式** | ❌ 无 | Undercover Mode |
+| **反蒸馏机制** | ❌ 无 | Anti-distillation |
+| **KAIROS持续运行** | ❌ 无 | 24h后台代理 |
+| **VS Code扩展** | ❌ 无 | Beta原生集成 |
+| **插件市场** | ❌ 无 | 完整生态 |
+| **Remote Control协议** | ⚠️ 基础 | 完整远程控制 |
+| **Checkpoints API** | ⚠️ git stash | 完整快照+回滚UI |
+| **Background Agents** | ⚠️ 子Agent异步 | 并行不阻塞 |
+
+---
+
+## 5. 架构差异详解
+
+### 5.1 上下文管理对比
+
+```
+Claude Code:                    Morpheus:
+┌─────────────────────┐        ┌─────────────────────┐
+│ CLAUDE.md (4层)     │        │ 无项目上下文文件     │
+│ Auto Memory         │        │ Basic Memory (2层)  │
+│ Context Collapse    │        │ Token阈值压缩       │
+│ Micro Compact       │        │ Prune + Compress    │
+│ Reflection          │        │ 无                  │
+└─────────────────────┘        └─────────────────────┘
+```
+
+**关键差距**：
+- Morpheus 无 CLAUDE.md 等效机制
+- 无自动记忆提取和巩固
+- 无多层记忆系统（Semantic/Episodic/Working）
+- 压缩策略简单，无自适应
+
+### 5.2 Agent架构对比
+
+```
+Claude Code:                    Morpheus:
+┌─────────────────────┐        ┌─────────────────────┐
+│ Subagent (递归)     │        │ Coordinator (DAG)   │
+│ Agent Teams         │        │ Team Messaging      │
+│ Background Agent    │        │ (无后台执行)        │
+│ Fork (信息隔离)     │        │ (无等效)            │
+│ Verification Agent  │        │ (无等效)            │
+└─────────────────────┘        └─────────────────────┘
+```
+
+**关键差距**：
+- Claude Code Subagent 递归调用 query.ts，无限嵌套
+- Claude Code Fork 有严格信息隔离（不能偷看/换模型/同步等待）
+- Claude Code Background Agent 并行不阻塞
+- Claude Code Verification Agent 代码层面对抗性约束
+- Morpheus Coordinator 是DAG调度，不是递归Agent
+
+### 5.3 安全架构对比
+
+```
+Claude Code:                    Morpheus:
+┌─────────────────────┐        ┌─────────────────────┐
+│ 6层权限防线         │        │ 4级风险评估         │
+│ cch Attestation     │        │ (无原生认证)        │
+│ Undercover Mode     │        │ (无)                │
+│ Anti-distillation   │        │ (无)                │
+│ 23条Bash规则        │        │ Risk Factors正则    │
+│ 语义AST分析         │        │ (无)                │
+│ AI分类器            │        │ (无)                │
+└─────────────────────┘        └─────────────────────┘
+```
+
+**关键差距**：
+- Claude Code 每层独立失败，Morpheus 是级联
+- Claude Code 有原生客户端认证（Bun/Zig层）
+- Claude Code 有卧底模式和反蒸馏
+- Claude Code 有语义分析（tree-sitter AST）
+- Claude Code 有AI分类器判断未知命令
+
+### 5.4 工程规模对比
+
+| 指标 | Claude Code | Morpheus | 差距 |
+|------|-------------|----------|------|
+| **代码总量** | 512K 行 TS | ~50K 行 Go | 10x |
+| **工具实现** | 40个 | 15个 | 2.7x |
+| **UI组件** | 140+ | TUI | - |
+| **提示词管理** | 5677 token 安全守则 | 单一System Prompt | - |
+| **缓存断点** | 14个 | 无 | - |
+| **记忆系统** | 3层+巩固 | 2层 | - |
+
+---
+
+## 6. 改进建议
+
+### P0 - 高优先级
+
+#### 6.1 项目上下文文件 (.morpheus.md)
+
 ```yaml
----
-name: git-release
-description: Create consistent releases and changelogs
-license: MIT
----
-# Skills 从 .opencode/skills/ 或 ~/.config/opencode/skills/ 加载
+# config.yaml
+morpheus:
+  context_file: .morpheus.md  # 项目级
+  # 全局级: ~/.morpheus.md
 ```
 
-### 2.3 Gemini CLI (Google)
+**加载顺序**：组织级 → 用户级 → 项目级 → 本地级
 
-**最新特性 (2026)**:
-- **免费额度**: 60 请求/分钟, 1000 请求/天 (个人 Google 账号)
-- **Gemini 3 模型**: 1M token 上下文窗口
-- **会话管理**: 自动保存和恢复会话 (v0.20.0+)
-- **会话浏览器**: `/resume` 交互式会话选择
-- **Checkpoints**: 自动保存和恢复快照
-- **沙盒隔离**: 容器化安全执行环境
-- **Token 缓存**: 优化 API 成本
-- **Trusted Folders**: 安全控制项目访问
-- **GEMINI.md**: 分层持久上下文
-- **.geminiignore**: 排除文件和目录
-- **Extensions**: 扩展生态系统 (Dynatrace, Elastic, Figma, Shopify)
-- **Agent Skills**: 2026年3月发布，更智能的扩展
-- **GitHub Action**: 官方 Action 支持 PR 审查、issue 分类
-- **非交互模式**: 管道输入和脚本自动化
-- **内置搜索 grounding**: 实时网络信息辅助调试
+**约束**：不受压缩影响，每次API请求都出现
 
-**CLI 命令**:
-```bash
-gemini                           # 交互模式
-gemini "query"                   # 单次查询
-gemini --file path/to/file       # 分析文件
-gemini --include "**/*.py"       # 文件模式
-gemini --stream                  # 流式响应
-gemini --model gemini-2.5-pro
-gemini --resume                  # 恢复会话
-gemini --list-sessions           # 列出所有会话
-gemini config set model gemini-2.5-pro
-gemini extensions install <name> # 安装扩展
-```
-
-**工具**:
-- 文件操作: read_file, write_file, replace, glob, search_file_content
-- Shell 命令: ! 前缀
-- Web: google_web_search, web_fetch
-- Agent: browser_agent, activate_skill, write_todos, save_memory
-
-### 2.4 Codex CLI (OpenAI)
-
-**最新特性 (2026年3月)**:
-- **GPT-5.4**: 默认推荐模型，结合前沿编码能力和强推理
-- **Rust 实现**: 速度和效率 (v0.117.0)
-- **Plugins 一等公民**: 产品级插件系统，同步/浏览/安装
-- **子 Agent v2**: 路径寻址 (如 `/root/agent_a`)，结构化消息
-- **App Server TUI**: 默认启用，支持远程连接
-- **图像工作流**: `view_image` 返回 URL，生成历史可恢复
-- **Approval Modes**: auto, pre-commit, full-access, yolo
-- **多平台沙盒**: Linux bubblewrap + Windows restricted-token
-- **代码审查**: `/review` 启动专用审查
-- **Feature Flags**: 特性开关配置
-- **多主题**: TUI 语法高亮和主题
-- **Worktrees**: 独立 git worktree 隔离
-- **Webhook/Automation**: 非交互模式，CI/CD 集成
-- **GitHub/Slack/Linear 集成**: 官方集成支持
-- **企业配置**: Managed configuration, RBAC
-
-**CLI 命令**:
-```bash
-codex                           # 交互 TUI
-codex "query"                   # 单次查询
-codex --model gpt-5.4
-codex --path /path/to/project
-codex exec "fix the CI failure" # 非交互执行
-codex --image img1.png,img2.jpg # 图像输入
-codex features list             # 特性列表
-codex features enable unified_exec
-codex /review                   # 代码审查
-codex /model                    # 切换模型
-codex /permissions              # 权限设置
-```
-
-**配置**:
-```toml
-model = "gpt-5.4"
-review_model = "gpt-5.4"
-[agents]
-```
-
----
-
-## 3. Morpheus 当前实现
-
-### 3.1 已实现功能 ✅
-
-**MCP 协议**:
-- 完整的 MCP 客户端实现
-- 支持 stdio、HTTP、SSE 三种传输方式
-- 动态代理 MCP 服务器工具
-- 资源订阅和缓存机制
+#### 6.2 多层记忆系统
 
 ```go
-type Manager struct {
-    clients          map[string]*client
-    tools            map[string]*ProxyTool
-    onChange         func() error
-    onResourceUpdate func(server, uri string, payload map[string]any)
+type MemorySystem struct {
+    semantic    *SemanticMemory  // 持久知识，RAG检索
+    episodic    *EpisodicMemory // 对话历史，时间索引
+    working     *WorkingMemory   // 当前上下文，指针替代
 }
+
+// Reflection: 每轮Act完成后自省
+func (m *MemorySystem) Reflection(ctx context.Context) error
 ```
 
-**多 Agent 协调**:
-- Coordinator 实现 (`internal/app/coordinator.go`)
-- 任务自动分解 (最大 6 个任务)
-- 并行执行 (最大 3 并发)
-- 9 种内置 Agent: implementer, explorer, reviewer, architect, tester, devops, data, security, docs
+#### 6.3 增强Bash安全
 
-**自定义 Agent**:
-- YAML 配置支持
-- 工具权限配置 (tools 字段)
-- AgentRegistry 管理
-
-**交互式确认**:
-- approve/deny 机制
-- 4 级风险评估 (low/medium/high/critical)
-- 受保护路径配置
-
-**Skills 系统**:
-- 9 个内置 Skills: review, test, docs, refactor, debug, security, git, explain, optimize
-- Lazy Load 机制
-- 自定义 skill 目录支持
-
-**SQLite 持久化**:
-- 会话存储
-- 消息记录
-
-### 3.2 待实现功能
-
- | 功能                | 描述                  | 优先级   |
- | ------              | ------                | -------- |
- | claude.md/gemini.md | 项目级上下文文件      | high     |
- | agent teams         | 多会话协调            | medium   |
- | remote control      | 远程控制协议          | medium   |
- | subagents 增强      | 更灵活的子 agent 配置 | medium   |
- | 插件市场            | 插件打包和分发        | low      |
- | 多平台支持          | windows 原生          | low      |
- | ide 集成            | vs code/editor 扩展   | low      |
-
----
-
-## 4. 功能差距详解
-
-### 4.1 上下文管理
-
-**Morpheus**:
-- 基于 token 计数的智能压缩 (60000 tokens 阈值)
-- 保留最近 4 条消息 + 生成结构化摘要
-
-**竞品**:
-- Claude Code: CLAUDE.md (项目级), ~/.claude.md (全局级), Auto Memory
-- OpenCode: Auto Compact 95%, AGENTS.md
-- Gemini CLI: GEMINI.md, 分层上下文
-- Codex: AGENTS.md
-
-**差距**:
-- 无项目级上下文文件机制
-- 无全局级上下文文件
-- 无自动记忆截断
-
-### 4.2 Agent 系统
-
-**Morpheus**:
-- 9 种内置 Agent Profile
-- 自定义 Agent 配置
-- DAG 任务调度
-
-**竞品**:
-- Claude Code: Subagents (可配置), Agent Teams
-- OpenCode: Primary (Build/Plan) + Subagents (General/Explore) + 自定义
-- Gemini CLI: 单一 Agent, Extension 扩展
-- Codex: Agent 模式切换, Subagents
-
-**差距**:
-- 无 Agent Teams 多会话协调
-- 无远程控制协议
-
-### 4.3 权限系统
-
-**Morpheus**:
-- 策略引擎 (risk factors + protected paths)
-- 4 级风险评估
-- 交互式确认
-
-**竞品**:
-- Claude Code: Hook Chain, Allow/Deny, Rate limiting
-- OpenCode: Pattern-based permissions
-- Gemini CLI: Trusted Folders, .geminiignore
-- Codex: Approval modes (auto, pre-commit, full-access, yolo)
-
-**差距**:
-- 无细粒度权限规则
-- 无运行时权限调整
-
-### 4.4 生态
-
-**Morpheus**:
-- 基础 MCP 支持
-- 9 个内置 Skills
-- 自定义 Skills 目录
-
-**竞品**:
-- Claude Code: 插件市场, 第三方 Skills
-- OpenCode: 30+ 自定义工具, Zen 优化模型
-- Gemini CLI: Extensions 生态 (Dynatrace, Elastic, Figma)
-- Codex: Plugins, Codex Cloud
-
-**差距**:
-- 无官方插件市场
-- 无社区 Extensions/Skills 生态
-- 无 Zen/Cloud 托管服务
-
----
-
-## 5. 架构改进建议
-
-### 5.1 High Priority: 上下文管理
-
-#### 5.1.1 引入项目上下文文件
-```yaml
-# 支持 .morpheus.md (项目级)
-# 支持 ~/.morpheus.md (全局级)
-```
-
-#### 5.1.2 增强智能上下文压缩
-- 基于 token 计数而非固定阈值
-- 保留关键决策点
-- 生成结构化摘要
-
-### 5.2 Medium Priority: Agent 增强
-
-#### 5.2.1 Agent Teams
 ```go
-type Team struct {
-    ID      string
-    Agents  []string  // Agent IDs
-    SharedContext bool
+// internal/security/bash_audit.go
+type BashAuditor struct {
+    staticRules    []StaticRule   // 23种模式匹配
+    semanticParser *ASTParser     // tree-sitter AST
+    classifier     *AIClassifier  // LLM分类器 (yolo mode)
 }
 ```
 
-#### 5.2.2 Remote Control
-```bash
-morph remote --listen ws://localhost:8080
-morph remote --connect ws://remote:8080
+### P1 - 中优先级
+
+#### 6.4 Subagent增强
+
+- 支持递归嵌套（当前只支持一层）
+- 实现Fork信息隔离机制
+- Background Agent支持
+
+#### 6.5 Checkpoint API
+
+```go
+// API扩展
+POST /api/v1/checkpoints      // 创建快照
+GET  /api/v1/checkpoints     // 列出快照
+POST /api/v1/checkpoints/:id/rollback  // 回滚
 ```
 
-### 5.3 Low Priority: 生态完善
+#### 6.6 卧底模式
 
-#### 5.3.1 插件市场
-- 支持插件打包和分发
-- 集成社区 Skills
+```go
+// internal/undercover/undercover.go
+type UndercoverMode struct {
+    enabled     bool
+    stripIdentity   bool
+    stripModelID    bool
+    blockInternalInfo bool
+}
+```
 
-#### 5.3.2 IDE 集成
-- VS Code 扩展
-- Editor 集成
+### P2 - 低优先级
 
----
+#### 6.7 插件市场
 
-## 7. 用户体验对比 (2026)
+- 打包格式定义
+- 签名验证
+- 社区分享平台
 
-### 7.1 对话用户友好程度
+#### 6.8 VS Code扩展
 
- | 维度         | Morpheus          | Claude Code          | OpenCode            | Gemini CLI       | Codex           |
- | ----------   | ----------------- | -----------------    | ------------------- | ---------------- | --------------- |
- | **上手难度** | 中等 (需配置 API) | 高 (需订阅)          | 低 (多平台登录)     | 低 (免费)        | 中 (需订阅)     |
- | **交互模式** | TUI + REST API    | 原生 TUI             | TUI + Desktop App   | 原生 TUI         | TUI + App       |
- | **会话恢复** | SQLite + 文件     | Checkpoints          | 事件源同步          | Checkpoints      | 自动保存        |
- | **快捷命令** | 基础              | 丰富 (/btw, /review) | 丰富 (@general)     | 基础             | 丰富 (/model)   |
- | **错误恢复** | 手动              | 自动 Checkpoints     | 分享链接            | Checkpoints      | 自动快照        |
- | **无障碍**   | 需手动安装        | 一键安装             | 多平台              | npx 即用         | 需安装          |
-
-**Morpheus 现状**:
-- TUI 交互相对基础
-- 无 Checkpoints/自动快照机制
-- 会话恢复依赖手动指定 session ID
-
-### 7.2 Token 节省程度
-
- | 维度           | Morpheus        | Claude Code     | OpenCode        | Gemini CLI    | Codex           |
- | -------------- | --------------- | --------------- | --------------- | ------------- | --------------- |
- | **上下文窗口** | 依赖模型        | 1M (Sonnet)     | 依赖模型        | 1M            | 依赖模型        |
- | **压缩策略**   | 60K tokens      | Auto Memory     | 95% 压缩        | Token 缓存    | Compaction      |
- | **压缩方式**   | 固定阈值        | 自适应          | 百分比          | 智能缓存      | 自动            |
- | **项目感知**   | 无              | CLAUDE.md       | AGENTS.md       | GEMINI.md     | AGENTS.md       |
- | **忽略机制**   | .gitignore      | 自动发现        | 自动 LSP        | .geminiignore | .aiderignore    |
-
-**Morpheus 现状**:
-- 固定 60K tokens 压缩阈值，不够智能
-- 无项目级上下文文件 (.morpheus.md)
-- 无自定义忽略规则
-
-### 7.3 完成工作的好坏程度
-
- | 维度         | Morpheus        | Claude Code     | OpenCode        | Gemini CLI      | Codex           |
- | ------------ | --------------- | --------------- | --------------- | -------------   | --------------- |
- | **自主能力** | 中等            | 强              | 强              | 中等            | 强              |
- | **工具广度** | 15+ 内置        | MCP + 插件      | 30+ 自定义      | Extensions      | MCP + 插件      |
- | **执行模式** | Build/Plan      | 单一 + Subagent | Build/Plan      | 单一            | Agent 模式切换  |
- | **多任务**   | 6 Agent DAG     | Agent Teams     | 多会话并行      | 并行            | Subagents       |
- | **代码质量** | 依赖模型        | 高 (Opus)       | 高 (Claude)     | 中等            | 高 (GPT-5)      |
- | **调试能力** | 基础            | 强              | 强              | 中等            | 强              |
- | **安全策略** | 4级风险         | Hook Chain      | 权限模式        | Trusted Folders | Approval modes  |
-
-**Morpheus 现状**:
-- 工具生态相对单一
-- 无插件市场，扩展性有限
-- 自主能力中等，适合有经验的开发者
+- LSP深度集成
+- 遥测和debug适配
 
 ---
 
-## 8. 综合评估
+## 7. 总结
 
-### 8.1 优劣势总结
+### 7.1 Morpheus定位
 
-**Morpheus 优势**:
-- 开源 MIT 协议，可自由定制
-- 多模型支持 (6+ provider)
-- 完整 MCP 客户端实现
-- DAG 任务调度
-- 工具权限配置灵活
-- Go 1.25 高性能后端
+Morpheus 是一个**工程导向**的AI编程助手：
+- Go后端高性能，模块清晰
+- 重视扩展性（Plugin/Skills/Subagent）
+- 多模型支持灵活
+- DAG协调器比Claude Code更强大
 
-**Morpheus 劣势**:
-- 上下文管理不如竞品智能
-- 无项目级上下文文件
-- 生态插件较少
-- 无 Checkpoints/自动快照
-- IDE 集成缺失
-- Windows 支持待完善
+### 7.2 核心差距
 
-### 8.2 改进优先级 (Todo List)
+| 维度 | Morpheus | Claude Code |
+|------|----------|-------------|
+| **上下文管理** | 简单token阈值 | CLAUDE.md + 多层压缩 + 记忆巩固 |
+| **Agent深度** | DAG协调 | 递归嵌套 + Fork隔离 + Background |
+| **安全体系** | 策略引擎 | 6层防线 + 原生认证 + 反蒸馏 |
+| **工程规模** | ~50K行 | 512K行 |
+| **生态** | 起步 | 完整插件市场 |
 
-#### P0 - 高优先级 (立即实现)
+### 7.3 竞争优势
 
-- [ ] **.morpheus.md 上下文文件**
-  - 支持项目级上下文文件 (.morpheus.md)
-  - 支持全局级上下文文件 (~/.morpheus.md)
-  - 配置项: `morpheus.context_file`
+1. **DAG协调器**：比Claude Code的subagent更灵活的任务分解
+2. **多模型**：不锁定Claude，支持75+ provider
+3. **开源可控**：MIT协议，可深度定制
+4. **模块化**：Go清晰架构，易维护和扩展
 
-- [ ] **Checkpoints 机制**
-  - 自动保存代码状态快照
-  - 支持回滚到指定 checkpoint
-  - 冷却时间: 每次工具执行后
+### 7.4 改进路线图
 
-#### P1 - 中优先级 (下一版本)
+```
+Phase 1 (P0): 上下文管理
+├─ .morpheus.md 项目上下文文件
+├─ 多层记忆系统 (Semantic/Episodic/Working)
+└─ Reflection 机制
 
-- [ ] **Agent Teams**
-  - 多会话协调，共享任务和 P2P 消息
-  - 支持子 Agent 并行运行
-  - 共享上下文管理
+Phase 2 (P1): Agent增强
+├─ Subagent递归嵌套
+├─ Fork信息隔离
+└─ Background Agent
 
-- [ ] **远程控制协议**
-  - WebSocket 远程连接支持
-  - 移动端/浏览器远程控制
-  - 认证和会话管理
+Phase 3 (P2): 安全增强
+├─ Bash安全审计增强
+├─ 原生客户端认证
+└─ 卧底模式
 
-#### P2 - 低优先级 (规划中)
-
-- [ ] **插件系统增强**
-  - 插件市场机制
-  - MCP 插件支持
-  - 社区 Skills 集成
-
-- [ ] **IDE 集成**
-  - VS Code 扩展
-  - Editor 集成
-  - LSP 深度集成
+Phase 4 (P3): 生态
+├─ 插件市场
+└─ VS Code扩展
+```
 
 ---
 
-## 9. 结论
-
-Mpheus 当前架构已实现完整的 AI 编码助手核心功能：
-
-  | 功能                | 状态      |
-  | ------              | ------    |
-  | MCP 协议支持        | ✅ 已实现 |
-  | 多 Agent 协调       | ✅ 已实现 |
-  | 自定义 Agent 配置   | ✅ 已实现 |
-  | Agent Profile (9种) | ✅ 已实现 |
-  | 交互式确认机制      | ✅ 已实现 |
-  | 策略引擎 (4级风险)  | ✅ 已实现 |
-  | Skills 系统 (9内置) | ✅ 已实现 |
-  | Lazy Load 机制      | ✅ 已实现 |
-  | SQLite 持久化       | ✅ 已实现 |
-  | 自定义 Skill 目录   | ✅ 已实现 |
-
-**与竞品的主要差距**:
-
-1. **生态**: 无插件市场/Extensions 生态
-2. **上下文**: 无 CLAUDE.md/GEMINI.md 项目上下文文件
-3. **协作**: 无 Agent Teams 多会话协调
-4. **远程**: 无 Remote Control 协议
-5. **平台**: Windows 支持待完善
-6. **IDE**: 无官方 Editor 集成
-
-**建议优先实现**:
-1. 项目上下文文件机制 (.morpheus.md)
-2. Agent Teams 多会话协调
-3. 远程控制协议
-
-这两个改进能在较短时间内显著提升用户体验，缩小与竞品的差距。
+_文档版本: 2.0_
+_最后更新: 2026-04-03_
