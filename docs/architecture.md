@@ -1,975 +1,650 @@
-# Morpheus 工具架构文档
+# Morpheus 项目架构分析文档
 
-Morpheus 是一个 AI 代码助手，采用模块化架构设计，支持多模型 planner、灵活的 tool 扩展、MCP 协议集成、安全策略控制、多 Agent 协调和自定义 Skills。
+## 一、项目概述
 
-## 1. 系统架构总览
+**Morpheus** 是一个本地 AI Agent 运行时，采用 **Go 1.25** 后端 + **TypeScript/Bun (Solid.js)** 前端 TUI 的混合架构。核心定位是为开发者提供可控的 AI 编程助手能力，支持多Agent协作、MCP协议扩展、Session持久化、安全策略控制等企业级特性。
+
+**仓库**: https://github.com/zetatez/morpheus
+
+---
+
+## 二、技术架构图
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              CLI / API Server                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                   Runtime                                    │
-│  ┌──────────────┐  ┌─────────────┐  ┌────────────┐  ┌──────────────────┐   │
-│  │ Conversation │  │   Planner   │  │Coordinator │  │    Plugin        │   │
-│  │   Manager    │  │   (LLM)    │  │            │  │    Registry      │   │
-│  └──────────────┘  └─────────────┘  └────────────┘  └──────────────────┘   │
-│  ┌──────────────┐  ┌─────────────┐  ┌────────────┐  ┌──────────────────┐   │
-│  │   Skills     │  │ AgentRegistry│  │   Policy   │  │   Session        │   │
-│  │   (Lazy)     │  │(Custom Agents)│  │   Engine  │  │   (SQLite)      │   │
-│  └──────────────┘  └─────────────┘  └────────────┘  └──────────────────┘   │
-│         │                 │               │                  │              │
-│         └─────────────────┴───────────────┴──────────────────┘              │
-│                                    │                                         │
-│                     ┌──────────────┴──────────────┐                         │
-│                     │       Tool Registry         │                         │
-│                     │  (fs/cmd/agent/skill/mcp/...)│                         │
-│                     └─────────────────────────────┘                         │
-│                                    │                                         │
-│         ┌─────────────────────────┼─────────────────────────┐              │
-│         │             Policy Engine (Security)                │              │
-│         └───────────────────────────────────────────────────────┘              │
-│                                    │                                         │
-│                     ┌──────────────┴──────────────┐                         │
-│                     │       AgentLoop             │                         │
-│                     │  (Build/Plan modes)         │                         │
-│                     └─────────────────────────────┘                         │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLI/TUI Layer                            │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │  Solid.js TUI   │  │   REST API      │  │   REPL Mode     │  │
+│  │  (cli/)         │  │   :8080         │  │                 │  │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  │
+└───────────┼────────────────────┼────────────────────┼───────────┘
+            │                    │                    │
+┌───────────▼────────────────────▼────────────────────▼───────────┐
+│                      Application Layer (Go)                       │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                      Runtime (4258行)                      │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐            │   │
+│  │  │ AgentLoop  │ │ Coordinator│ │ MCP Manager│            │   │
+│  │  └────────────┘ └────────────┘ └────────────┘            │   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐            │   │
+│  │  │  Planner   │ │ConvoManager│ │Skill Loader│            │   │
+│  │  └────────────┘ └────────────┘ └────────────┘            │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+            │                    │                    │
+┌───────────▼────────────────────▼────────────────────▼───────────┐
+│                      Plugin & Tool Layer                           │
+│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐         │
+│  │ Plugin Registry│ │ Tool Registry  │ │ Policy Engine  │         │
+│  └────────────────┘ └────────────────┘ └────────────────┘         │
+│  ┌──────────────────────────────────────────────────────────┐     │
+│  │                    Tool Implementations                   │     │
+│  │  fs.*  cmd.*  git.*  web.*  mcp.*  lsp.*  agent.*  skill.*│     │
+│  └──────────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────┘
+            │
+┌───────────▼───────────────────────────────────────────────────────┐
+│                      Storage Layer                                 │
+│  ┌─────────────────────┐         ┌─────────────────────┐         │
+│  │   SQLite (WAL)      │         │   File System       │         │
+│  │   sessions.db       │         │   sessions/*.json   │         │
+│  └─────────────────────┘         └─────────────────────┘         │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. 核心组件
+---
 
-### 2.1 Runtime (`internal/app/runtime.go`)
+## 三、技术栈
 
-Runtime 是整个系统的主入口，负责组件的初始化和组装。
+### 后端 (Go 1.25)
+
+| 依赖 | 用途 |
+|------|------|
+| `github.com/spf13/cobra` | CLI 框架 |
+| `github.com/spf13/viper` | 配置管理 |
+| `go.lsp.dev/protocol` | LSP 代码智能 |
+| `go.uber.org/zap` | 结构化日志 |
+| `modernc.org/sqlite` | SQLite 驱动 |
+| `gopkg.in/yaml.v3` | YAML 解析 |
+| `github.com/google/uuid` | UUID 生成 |
+| `github.com/shirou/gopsutil/v3` | 系统指标 |
+
+### 前端 (TypeScript/Bun)
+
+| 依赖 | 用途 |
+|------|------|
+| `@opentui/core` | TUI 组件 |
+| `@opentui/solid` | Solid.js 集成 |
+| `solid-js` | UI 框架 |
+| `yargs` | CLI 参数解析 |
+| `clipboardy` | 剪贴板访问 |
+| `jsdiff` | 差异可视化 |
+
+### 支持的 LLM 提供商
+
+OpenAI, DeepSeek, MiniMax, GLM, Gemini, Anthropic, OpenRouter, Azure, Groq, Mistral, Cohere, TogetherAI, Perplexity, Ollama, LM Studio (本地), OpenAI 兼容接口
+
+---
+
+## 四、核心组件分析
+
+### 4.1 Runtime — 应用核心引擎
+
+**位置**: `internal/app/runtime.go` (4258行)
+
+Runtime是整个系统的心脏，采用**组合模式**聚合了所有子组件：
 
 ```go
 type Runtime struct {
-    cfg           config.Config      // 配置
-    logger        *zap.Logger        // 日志
-    conversation  *convo.Manager    // 会话管理
-    planner       sdk.Planner        // 规划器
-    orchestrator  *exec.Orchestrator // 执行器
-    registry      *registry.Registry // 工具注册表
-    audit         *auditWriter       // 审计日志
-    session       *session.Writer    // 文件持久化
-    sessionStore  *session.Store     // SQLite 持久化
-    plugins       *plugin.Registry   // 插件系统
-    skills        *skill.Loader      // 技能加载器
-    mcpSessions   sync.Map          // MCP 会话管理
-    taskState     sync.Map          // 任务状态
-    pendingConfirmations sync.Map    // 待确认操作
-    agentRegistry *AgentRegistry     // 自定义 Agent 注册表
+    cfg              config.Config
+    logger           *zap.Logger
+    conversation     *convo.Manager
+    planner          sdk.Planner
+    orchestrator     *execpkg.Orchestrator
+    registry         *registry.Registry
+    session          *session.Writer
+    sessionStore     *session.Store
+    plugins          *plugin.Registry
+    skills           *skill.Loader
+    agentRegistry    *AgentRegistry
+    subagents        *subagent.Loader
 }
 ```
 
-**初始化流程**:
+**初始化链路** (10步串行):
+
 ```
-NewRuntime()
-  ├─ newLogger()             → 初始化 zap 日志
-  ├─ convo.NewManager()      → 创建会话管理器
-  ├─ plugin.NewRegistry()    → 创建插件注册表
-  ├─ loadSoulPrompt()        → 加载 SOUL.md 系统提示
-  ├─ skill.NewLoader()       → 初始化技能加载器 (Lazy Mode)
-  ├─ mcp.NewManager()        → 初始化 MCP 管理器
-  ├─ registry.NewRegistry()   → 创建工具注册表
-  ├─ buildAvailableTools()   → 注册所有内置工具
-  ├─ mcp.Bootstrap()         → 启动 MCP 服务器
-  ├─ policy.NewPolicyEngine() → 创建策略引擎
-  ├─ NewAgentRegistry()      → 创建自定义 Agent 注册表
-  ├─ buildPlanner()          → 创建 planner (openai/keyword)
-  └─ newAuditWriter()        → 创建审计日志
-```
-    plugins       *plugin.Registry   // 插件系统
-    skills        *skill.Loader      // 技能加载器
-    mcpSessions   sync.Map           // MCP 会话管理
-    taskState     sync.Map           // 任务状态
-}
+newLogger → convo.NewManager → plugin.NewRegistry → loadSoulPrompt
+→ skill.NewLoader → mcp.NewManager → registry.NewRegistry
+→ buildAvailableTools → policy.NewPolicyEngine → buildPlanner
 ```
 
-**初始化流程**:
-```
-NewRuntime()
-  ├─ newLogger()             → 初始化 zap 日志
-  ├─ convo.NewManager()      → 创建会话管理器
-  ├─ plugin.NewRegistry()    → 创建插件注册表
-  ├─ loadSoulPrompt()        → 加载 SOUL.md 系统提示
-  ├─ skill.NewLoader()       → 初始化技能加载器
-  ├─ mcp.NewManager()        → 初始化 MCP 管理器
-  ├─ registry.NewRegistry() → 创建工具注册表
-  ├─ buildAvailableTools()   → 注册所有内置工具
-  ├─ mcp.Bootstrap()         → 启动 MCP 服务器
-  ├─ policy.NewPolicyEngine()→ 创建策略引擎
-  ├─ buildPlanner()          → 创建 planner (openai/keyword)
-  └─ newAuditWriter()        → 创建审计日志
-```
+### 4.2 AgentLoop — 迭代执行引擎
 
-### 2.2 AgentLoop (`internal/app/agent_loop.go`)
+**位置**: `internal/app/agent_loop.go`
 
-AgentLoop 实现迭代式 agent 执行，是核心的业务逻辑处理层。
+核心循环，最多12步迭代：
 
-```go
-func (rt *Runtime) AgentLoop(ctx, sessionID, input string, format *OutputFormat, mode AgentMode) (Response, error)
-```
-
-**AgentMode 模式**:
-| 模式 | 说明 |
-|------|------|
-| `build` | 完整开发能力，可执行命令和写入文件 |
-| `plan` | 只读分析模式，仅生成计划不执行 |
-
-**交互式确认**:
-```
-pendingConfirmation
-  ├─ Tool: 待确认工具名
-  ├─ Inputs: 工具参数
-  └─ Decision: 决策信息
-```
-
-**执行流程**:
 ```
 AgentLoop
-  │
-  ├─ getPendingConfirmation() → 检查待确认操作
-  │   ├─ approve: 执行待确认操作
-  │   ├─ deny: 取消操作
-  │   └─ 其他: 提示用户确认
-  │
-  ├─ preprocessSkillCommand() → 预处理技能命令
-  ├─ appendMessage()        → 添加用户消息到会话
-  ├─ allowMentionedSkills() → 解析并允许引用的技能
-  ├─ checkAndCompress()     → 基于 token 计数的智能压缩
-  ├─ collectToolSpecs()     → 收集可用工具定义
-  ├─ buildAgentMessages()   → 构建完整的消息列表
-  │
-  ├─ if mode == AgentModePlan:
-  │   └─ 添加只读提示
-  │
-  ├─ maybeCoordinate()     → 检查是否需要多 Agent 协调
-  │
-  └─ Loop (maxAgentSteps = 12):
-      │
-      ├─ callChatWithTools() → 调用 LLM with tools
-      │
-      ├─ if format == json_schema:
-      │   └─ extractStructuredOutput() → 提取结构化输出
-      │
-      ├─ for each tool call:
-      │   ├─ normalizeToolName() → 规范化工具名
-      │   ├─ orchestrator.ExecuteStep() → 执行工具
-      │   ├─ truncateToolResult() → 截断大型输出
-      │   └─ appendMessage() → 添加 assistant 消息
-      │
-      ├─ if resp.FinishReason == "stop":
-      │   └─ break loop
-      │
-      └─ continue next iteration
+  ├─ getPendingConfirmation()    # 待确认操作
+  ├─ preprocessSkillCommand()     # @skill 命令预处理
+  ├─ appendMessage()              # 追加用户消息
+  ├─ allowMentionedSkills()       # 解析并启用引用的技能
+  ├─ checkAndCompress()           # 60k token 上下文压缩
+  ├─ collectToolSpecs()           # 收集可用工具
+  ├─ buildAgentMessages()         # 构建完整消息列表
+  ├─ maybeCoordinate()            # 多Agent协调检测
+  └─ Loop (maxAgentSteps=12):
+      ├─ callChatWithTools()      # 调用LLM
+      ├─ extractStructuredOutput() # 提取JSON输出
+      ├─ For each tool_call:
+      │   ├─ normalizeToolName()
+      │   ├─ orchestrator.ExecuteStep()
+      │   ├─ truncateToolResult()
+      │   └─ appendMessage()
+      └─ If finish_reason=="stop": break
 ```
 
-### 2.3 Orchestrator (`internal/exec/orchestrator.go`)
+**Agent 运行模式**:
 
-Orchestrator 负责单步 plan 的执行，包含策略检查和插件钩子。
+- `build` - 完全访问权限（执行命令、写入文件）
+- `plan` - 只读模式（仅生成计划）
+
+### 4.3 Coordinator — 多Agent编排器
+
+**位置**: `internal/app/coordinator.go`
+
+**触发条件**:
+
+- 输入 >= 12单词 且 包含换行/"then"/"and"/"also"
+- 或包含 "plan"/"architecture"/"review"
+
+**内置 Agent Profiles** (10个):
+
+| Agent | 用途 |
+|-------|------|
+| `implementer` | 交付具体代码变更 |
+| `explorer` | 调查代码库细节 |
+| `reviewer` | 评审变更风险 |
+| `architect` | 设计高层方案 |
+| `tester` | 编写和验证测试 |
+| `devops` | 处理部署和 CI/CD |
+| `data` | 数据管道工作 |
+| `security` | 安全漏洞评审 |
+| `docs` | 创建文档 |
+| `shell-python-operator` | Shell 管道和 Python 脚本 |
+
+**DAG 调度**:
+
+- 支持 `depends_on` 依赖声明
+- 自动拓扑排序
+- 最大3个并发任务
+- 顺序执行有依赖的任务
+
+### 4.4 Orchestrator — 工具执行编排器
+
+**位置**: `internal/exec/orchestrator.go`
+
+单步计划执行，带策略检查：
 
 ```go
 type Orchestrator struct {
-    registry sdk.ToolRegistry  // 工具注册表
-    policy   *policy.Engine    // 策略引擎
-    workdir  string           // 工作目录
-    plugins  *plugin.Registry // 插件系统
+    registry sdk.ToolRegistry
+    policy   *policy.Engine
+    workdir  string
+    plugins  *plugin.Registry
 }
-
-func (o *Orchestrator) ExecuteStep(ctx, sessionID string, step sdk.PlanStep) (sdk.ToolResult, error)
 ```
 
 **执行流程**:
+
 ```
 ExecuteStep
-  │
   ├─ registry.Get(step.Tool) → 获取工具实例
-  │
-  ├─ checkPolicy(ctx, step)  → 策略检查
-  │   ├─ cmd.exec: EvaluateCommand(command, workdir)
-  │   └─ fs.read/write: EvaluateCommand(tool, path)
-  │
-  ├─ if step.Tool == "skill.invoke":
-  │   └─ inputs["session_id"] = sessionID
-  │
-  ├─ if step.Tool == "mcp.query":
-  │   └─ inputs["session_id"] = sessionID
-  │
-  ├─ plugins.ApplyToolBefore() → 工具执行前钩子
-  │
-  ├─ tool.Invoke(ctx, inputs) → 调用工具
-  │
-  ├─ plugins.ApplyToolAfter() → 工具执行后钩子
-  │
-  └─ return result
+  ├─ checkPolicy() → 策略评估
+  │   ├─ cmd.exec → EvaluateCommand(command, workdir)
+  │   └─ fs.* → EvaluateCommand(tool, path)
+  ├─ ApplyToolBefore() → 插件前置钩子
+  ├─ tool.Invoke() → 执行工具
+  └─ ApplyToolAfter() → 插件后置钩子
 ```
 
-### 2.4 Coordinator (`internal/app/coordinator.go`)
+### 4.5 Policy Engine — 安全策略引擎
 
-Coordinator 实现多 Agent 协调，支持任务分解和 DAG 依赖调度。
+**位置**: `internal/policy/engine.go`
 
-```go
-type coordinatorPlan struct {
-    Summary string            `json:"summary"`
-    Tasks   []coordinatorTask `json:"tasks"`
-}
+4级风险评估体系:
 
-type coordinatorTask struct {
-    ID        string   `json:"id"`
-    Role      string   `json:"role"`
-    Prompt    string   `json:"prompt"`
-    DependsOn []string `json:"depends_on,omitempty"`
-}
+| 等级 | 典型命令 | 处理方式 |
+|------|----------|----------|
+| `critical` | `dd of=`, `mkfs`, `>:/dev/` | 阻止执行 |
+| `high` | `rm -rf`, `curl \| sh`, `chmod 4777` | 需确认 |
+| `medium` | `chmod 755`, `kill`, `apt remove` | 需确认 |
+| `low` | `pip install`, `npm install` | 可自动批准 |
+
+**保护路径**: `/etc`, `/usr/bin`, `~/.ssh`, `~/.aws` 等系统敏感目录
+
+### 4.6 Tool Registry — 工具注册表
+
+**位置**: `internal/tools/registry/registry.go`
+
+内存工具注册，带 sync.RWMutex。
+
+**内置工具**:
+
+| 工具 | 描述 |
+|------|------|
+| `fs.read` | 读取文件内容 |
+| `fs.write` | 写入文件内容 |
+| `fs.edit` | 编辑替换 |
+| `fs.glob` | glob 模式匹配 |
+| `fs.grep` | 文本搜索 |
+| `cmd.exec` | Shell 命令执行 |
+| `lsp.query` | LSP 操作 |
+| `git.*` | Git 操作 |
+| `web.fetch` | 获取网页 |
+| `conversation.ask` | 向用户提问 |
+| `skill.invoke` | 调用技能 |
+| `mcp.query` | MCP 服务器管理 |
+| `agent.run` | 运行子 Agent |
+| `todo.write` | Todo 管理 |
+
+### 4.7 Skills System — 技能系统
+
+**位置**: `internal/skill/loader.go`
+
+懒加载技能系统，内置9个技能：
+
+`@review`, `@test`, `@docs`, `@refactor`, `@debug`, `@security`, `@git`, `@explain`, `@optimize`
+
+**自定义技能位置**:
+
+- `~/.config/morpheus/skills/`
+- `.morpheus/skills/`
+
+### 4.8 Session Management — 会话管理
+
+**位置**: `internal/session/`
+
+双后端存储：
+
+- **SQLite**: `sessions.db`，WAL 模式
+- **File**: JSON 文件在 sessions 目录
+
+**数据库 Schema**:
+
+```sql
+sessions(id, created_at, updated_at, summary, metadata_json)
+messages(id, session_id, idx, role, content, parts_json, timestamp)
 ```
 
-**协调流程**:
-```
-maybeCoordinate()
-  │
-  ├─ shouldCoordinate() → 判断是否需要协调
-  │   - 输入长度 >= 12 词
-  │   - 包含换行、"then"、"and"、"also"
-  │   - 包含 "plan"、"architecture"、"review"
-  │
-  ├─ buildCoordinatorPlan() → LLM 分解任务
-  │   └─ 返回 JSON 任务计划 (max 6 tasks)
-  │
-  └─ runCoordinatorTasks() → 执行任务
-      ├─ hasDependencies() → 检查是否有依赖
-      ├─ 无依赖: runTasksParallel() → 并行执行 (max 3)
-      └─ 有依赖: runTasksDAG() → DAG 拓扑排序执行
-```
+### 4.9 MCP Protocol — MCP 协议客户端
 
-**DAG 调度**:
-- 支持 `depends_on` 字段定义任务依赖
-- 自动进行拓扑排序
-- 等待依赖完成后执行后续任务
+**位置**: `internal/tools/mcp/mcp.go`
 
-**触发条件**:
-- 输入长度 >= 12 个词
-- 包含多步骤关键词 (then, and, also)
-- 包含任务类型关键词 (plan, architecture, review)
-- 非 builtin planner 且有 API Key
+完整 MCP 客户端，支持三种传输方式：
 
-### 2.5 Agent Profile (`internal/tools/agenttool/coordinator.go`)
+- **stdio**: 本地进程通信
+- **HTTP**: 远程服务器，支持 SSE
+- **Auth**: Bearer Token 认证
 
-Morpheus 支持内置和自定义 Agent Profile：
+### 4.10 Plugin System — 插件系统
 
-```go
-type AgentProfile struct {
-    Name         string
-    Description  string
-    Instructions string
-}
-```
+**位置**: `internal/plugin/registry.go`
 
-**内置 Profile (9种)**:
-| Profile | 描述 | 用途 |
-|---------|------|------|
-| `implementer` | 交付具体代码修改 | 聚焦可执行步骤 |
-| `explorer` | 调查代码库细节 | 定位文件、API |
-| `reviewer` | 审查变更风险 | 识别问题、边界情况 |
-| `architect` | 设计高层方案 | 提出架构和权衡 |
-| `tester` | 编写和验证测试 | 单元测试、集成测试 |
-| `devops` | 部署和 CI/CD | Dockerfile、流水线 |
-| `data` | 数据管道处理 | SQL、ETL、数据模型 |
-| `security` | 安全漏洞审查 | 认证、加密、secret |
-| `docs` | 技术文档编写 | API 文档、README |
-
-### 2.6 自定义 Agent 配置 (`internal/app/agent_config.go`)
-
-Morpheus 支持在配置文件中定义自定义 Agent，包括工具权限控制：
-
-```yaml
-agent:
-  default_mode: build
-  agents:
-    - name: implementer
-      description: Deliver concrete code changes efficiently
-      instructions: Focus on actionable implementation steps...
-      tools:
-        - fs.read
-        - fs.write
-        - cmd.exec
-        - git.*
-      enabled: true
-
-    - name: analyst
-      description: Read-only code analysis
-      tools:
-        - fs.read
-        - fs.glob
-        - fs.grep
-        - lsp.query
-      enabled: true
-```
-
-**工具权限控制**:
-- 每个 Agent 可以配置独立的工具白名单
-- 支持通配符匹配 (如 `git.*` 匹配所有 git 工具)
-- 子 agent 执行时自动应用工具限制
-- `agent.run` 工具也支持 `tools` 参数
-
-**AgentDefinition 结构**:
-```go
-type AgentDefinition struct {
-    Name         string   // Agent 名称
-    Description  string   // Agent 描述
-    Instructions string   // Agent 指令
-    Tools        []string // 可用工具列表 (* 支持通配符)
-    Enabled      bool     // 是否启用
-}
-```
-
-**运行时流程**:
-```
-RunSubAgentWithProfile(profile, prompt)
-  │
-  ├─ GetTools(profile.Name) → 获取工具列表
-  │
-  └─ RunSubAgent(ctx, prompt, allowedTools)
-      │
-      └─ ctx = WithAllowedTools(ctx, tools)
-          │
-          └─ collectToolSpecs()
-              │
-              └─ IsToolAllowedWithList(tools, toolName) → 过滤工具
-```
-
-**AgentRegistry**:
-- 自动合并默认 Profile 和自定义配置
-- 支持覆盖内置 Profile
-- 支持工具权限配置
-    Instructions string
-}
-```
-
-| Profile | 描述 | 指令 |
-|---------|------|------|
-| `implementer` | 交付具体代码修改 | 聚焦可执行步骤，指出文件、编辑和测试 |
-| `explorer` | 调查代码库细节 | 定位相关文件、API 和行为，汇总发现 |
-| `reviewer` | 审查变更风险 | 识别正确性问题、边界情况和测试缺口 |
-| `architect` | 设计高层方案 | 提出架构或系统级方案，指出权衡
-
-## 3. 工具系统
-
-### 3.1 Tool 接口 (`pkg/sdk/interfaces.go`)
-
-```go
-type Tool interface {
-    Name()    string                      // 工具名称
-    Describe() string                      // 工具描述
-    Schema()  map[string]any              // 参数 schema
-    Invoke(ctx context.Context, input map[string]any) (ToolResult, error)
-}
-
-type ToolSpec interface {
-    Tool
-    Schema() map[string]any // 工具参数 schema
-}
-```
-
-### 3.2 ToolRegistry (`internal/tools/registry/registry.go`)
-
-工具注册中心，提供工具的注册和查找。
+基于钩子的可扩展性：
 
 ```go
 type Registry struct {
-    mu    sync.RWMutex
-    tools map[string]sdk.Tool
-}
-
-func (r *Registry) Register(tool sdk.Tool) error
-func (r *Registry) Get(name string) (sdk.Tool, bool)
-func (r *Registry) All() []sdk.Tool
-```
-
-### 3.3 内置工具
-
-| 工具名称 | 实现文件 | 功能描述 |
-|---------|---------|---------|
-| `agent.run` | `internal/tools/agenttool/agent.go` | 运行子 agent |
-| `fs.read` | `internal/tools/fs/fs.go` | 读取文件 |
-| `fs.write` | `internal/tools/fs/fs.go` | 写入文件 |
-| `fs.edit` | `internal/tools/fs/fs.go` | 编辑文件 |
-| `fs.glob` | `internal/tools/fs/fs.go` | glob 匹配 |
-| `fs.grep` | `internal/tools/fs/fs.go` | 文本搜索 |
-| `cmd.exec` | `internal/tools/cmd/cmd.go` | 执行命令 |
-| `skill.invoke` | `internal/tools/skilltool/skill.go` | 调用技能 |
-| `lsp.query` | `internal/tools/lsp/lsp.go` | LSP 代码理解 |
-| `conversation.ask` | `internal/tools/ask/question.go` | 向用户提问 |
-| `web.fetch` | `internal/tools/webfetch/webfetch.go` | 网页抓取 |
-| `respond.echo` | `internal/tools/respond/echo.go` | 直接响应 |
-| `mcp.query` | `internal/tools/mcp/mcp.go` | MCP 服务器控制 |
-| `mcp.*` | `internal/tools/mcp/mcp.go` | MCP 代理工具 (动态) |
-| `git.*` | `internal/tools/git/git.go` | Git 操作 |
-
-### 3.4 MCP 协议支持 (`internal/tools/mcp/mcp.go`)
-
-Morpheus 实现了完整的 MCP (Model Context Protocol) 客户端支持：
-
-```go
-type Manager struct {
-    clients          map[string]*client
-    tools            map[string]*ProxyTool
-    onChange         func() error
-    onResourceUpdate func(server, uri string, payload map[string]any)
-}
-
-type ServerConfig struct {
-    Name       string
-    Command    string  // stdio 传输命令
-    Transport  string  // stdio | http | sse
-    URL        string  // HTTP 端点
-    SSEURL     string  // SSE 端点
-    AuthToken  string
-    AuthHeader string
+    messageHooks  []MessageHook   # 消息转换
+    systemHooks   []SystemHook    # 系统提示转换
+    toolBefore    []ToolBeforeHook # 执行前
+    toolAfter     []ToolAfterHook  # 执行后
 }
 ```
 
-**支持的传输方式**:
-- **stdio**: 通过子进程 stdio 通信 (如 `npx -y @modelcontextprotocol/server-filesystem .`)
-- **http**: REST API 方式的 MCP 调用
-- **sse**: Server-Sent Events 方式接收通知
+---
 
-**MCP 工具**:
-- `mcp.query`: 管理 MCP 服务器连接、列出工具/资源、订阅资源更新
-- `mcp.<server>.<tool>`: 动态代理 MCP 服务器工具
+## 五、配置管理
 
-## 4. Planner 系统
-
-### 4.1 Planner 接口
-
-```go
-type Planner interface {
-    ID() string
-    Capabilities() []string
-    Plan(ctx context.Context, req PlanRequest) (Plan, error)
-}
-```
-
-### 4.2 LLM Planner (`internal/planner/llm/openai.go`)
-
-支持多 provider: openai, glm, minmax, deepseek, gemini
-
-```go
-type Planner struct {
-    model      string
-    temp       float64
-    system     string
-    endpoint   string
-    apiKey     string
-    provider   string
-}
-```
-
-**支持的模型**:
-
-| Provider | 默认模型 | 端点 |
-|---------|---------|------|
-| openai | gpt-4o-mini | https://api.openai.com/v1/chat/completions |
-| deepseek | deepseek-chat | https://api.deepseek.com/v1/chat/completions |
-| minmax | abab6.5s-chat | https://api.minimax.chat/v1/text/chatcompletion_v2 |
-| glm | glm-4-flash | https://open.bigmodel.cn/api/paas/v4/chat/completions |
-| gemini | gemini-2.0-flash | https://generativelanguage.googleapis.com/v1beta/models |
-
-**规划流程**:
-```
-Planner.Plan()
-  │
-  ├─ 构建 system prompt (工具说明)
-  ├─ 构建 user prompt (任务 + context)
-  │
-  ├─ http call to LLM API
-  │
-  └─ 解析响应返回 Plan
-      Plan {
-          Summary: string
-          Steps: []PlanStep {
-              ID: string
-              Description: string
-              Tool: string
-              Inputs: map[string]any
-              Status: StepStatus
-          }
-      }
-```
-
-### 4.3 Keyword Planner (`internal/planner/keyword/keyword.go`)
-
-基于关键词的简单 planner，适用于无 API Key 场景。
-
-## 5. 安全策略
-
-### 5.1 Policy Engine (`internal/policy/engine.go`)
-
-```go
-type Engine struct {
-    cfg                 config.Config
-    compiledRiskFactors []compiledFactor  // 风险因子正则
-    compiledPaths       []compiledPath    // 受保护路径
-}
-```
-
-**策略评估**:
-```
-EvaluateCommand(ctx, command, workdir)
-  │
-  ├─ evaluateCommand(command) → 匹配风险因子
-  │   RiskFactors: map[string][]string
-  │   - critical: rm -rf, :(){ :|:& };:, dd of=/dev/
-  │   - high: sudo, chmod 777, curl|sh
-  │   - medium: chmod, chown, apt remove
-  │   - low: pip install, npm install
-  │
-  ├─ evaluatePath(workdir) → 匹配保护路径
-  │   ConfirmProtectedPaths: [/etc, /usr, ~/.ssh, ...]
-  │
-  └─ 返回 PolicyDecision
-      PolicyDecision {
-          Allowed: bool
-          RiskLevel: RiskLevel
-          RequiresConfirm: bool
-          Reason: string
-      }
-```
-
-### 5.2 风险等级
-
-| 等级 | 说明 | 操作 |
-|-----|------|------|
-| `low` | 安全操作 | 默认允许 |
-| `medium` | 需确认后执行 | 提示用户确认 |
-| `high` | 需明确确认 | 提示用户确认 |
-| `critical` | 拒绝执行 | 直接拒绝 |
-
-## 6. 会话管理
-
-### 6.1 Conversation Manager (`internal/convo/manager.go`)
-
-内存会话管理，支持消息追加、历史压缩。
-
-```go
-type Manager struct {
-    mu           sync.RWMutex
-    sessions     map[string]*Session  // sessionID -> Session
-    systemPrompt string                // 系统提示词
-}
-
-type Session struct {
-    Messages []Message  // 消息列表
-    Summary  string     // 压缩后的摘要
-}
-```
-
-### 6.2 智能上下文压缩
-
-**压缩触发条件**:
-- 超过 `MaxHistoryTokens` (60000 tokens) 时触发压缩
-- 保留最近 4 条消息 + 生成摘要
-- 冷却时间: `CompressionCooldown` (2 分钟)
-
-**压缩策略**:
-1. **修剪历史**: 优先删除旧的工具输出，保留关键决策点
-2. **生成摘要**: 基于任务类型生成结构化摘要
-   - 代码任务: 关注实现状态、文件、命令、决策、剩余工作
-   - 一般任务: 关注目标、关键事实、决策、开放问题
-
-### 6.3 Session Writer (`internal/session/writer.go`)
-
-持久化会话数据到磁盘。
-
-```go
-type Writer struct {
-    sessionPath string
-    retention   time.Duration
-}
-
-// 文件结构:
-sessionID/
-  ├── conversation.raw.md   // 完整对话
-  ├── summary.md           // 压缩摘要
-  ├── tool-output-*.txt     // 工具输出 (大型)
-  └── session.meta.json    // 元数据
-```
-
-## 7. 插件系统
-
-### 7.1 Plugin Registry (`internal/plugin/registry.go`)
-
-基于钩子的扩展机制。
-
-```go
-type Registry struct {
-    mu           sync.RWMutex
-    messageHooks []MessageHook    // 消息处理钩子
-    systemHooks  []SystemHook     // 系统提示钩子
-    toolBefore   []ToolBeforeHook // 工具前钩子
-    toolAfter    []ToolAfterHook  // 工具后钩子
-}
-```
-
-**钩子类型**:
-- `MessageHook`: 消息发送前/后处理
-- `SystemHook`: 系统提示词修改
-- `ToolBeforeHook`: 工具输入预处理
-- `ToolAfterHook`: 工具输出后处理
-
-## 8. Skills 系统
-
-### 8.1 Skill Loader (`internal/skill/loader.go`)
-
-Morpheus 支持内置和自定义 Skills，采用 Lazy Load 机制。
-
-```go
-type Loader struct {
-    skillsPaths []string
-    skills      map[string]sdk.Skill
-    loaded      bool
-    lazyMode    bool
-    mu          sync.RWMutex
-}
-```
-
-**Lazy Load 机制**:
-- 默认只加载内置 Skills
-- 用户请求特定 skill 时自动加载用户自定义 skills
-- `LoadBuiltinOnly()`: 仅加载内置 skills
-- `LoadCustom()`: 按需加载用户自定义 skills
-
-**加载流程**:
-```
-List() / Get(name) / Invoke()
-    │
-    ├─ lazyMode == true?
-    │   └─ Yes: 调用 LoadCustom() 加载用户 skills
-    │
-    └─ 返回合并后的 skills
-```
-
-### 8.2 内置 Skills
-
-Morppheus 内置 9 个常用 Skills：
-
-| Skill | 描述 | 用途 |
-|-------|------|------|
-| `review` | 代码审查 | 审查变更、识别风险 |
-| `test` | 测试推荐 | 推荐测试命令 |
-| `docs` | 文档生成 | 起草/更新文档 |
-| `refactor` | 重构建议 | 分析代码改进机会 |
-| `debug` | 调试帮助 | 诊断问题、提供指导 |
-| `security` | 安全审查 | 检查安全漏洞 |
-| `git` | Git 指导 | Git 工作流建议 |
-| `explain` | 代码解释 | 解释概念和代码 |
-| `optimize` | 性能优化 | 分析性能瓶颈 |
-
-### 8.3 自定义 Skill
-
-用户可通过目录定义自定义 Skills，支持两个位置：
-
-- `~/.config/morpheus/skills/` (用户级)
-- `.morpheus/skills/` (项目级)
-
-```
-~/.config/morpheus/skills/
-└── my-skill/
-    ├── skill.yaml      # 清单配置
-    └── prompt.md      # Prompt 模板
-```
-
-**skill.yaml 示例**:
-```yaml
-name: my-skill
-description: Custom skill description
-capabilities:
-  - custom
-expected_token_cost: 1000
-```
-
-**prompt.md 示例**:
-```
-Please help with the following task:
-{{input}}
-```
-
-**Lazy Load**: 自定义 skills 采用懒加载机制，仅在用户首次调用时加载。
-
-### 8.4 Skill 接口
-
-```go
-type Skill interface {
-    Describe() SkillMetadata
-    Warmup(ctx context.Context) error
-    Invoke(ctx context.Context, input map[string]any) (map[string]any, error)
-}
-
-type SkillMetadata struct {
-    Name              string
-    Description       string
-    Capabilities      []string
-    ExpectedTokenCost int
-}
-```
-
-### 8.5 Skill 使用
-
-在对话中使用 `@skill` 触发：
-```
-@review 请审查这段代码
-@test 为这个功能写测试
-```
-
-## 9. 配置系统
-
-### 8.1 Config (`internal/config/config.go`)
-
-```go
-type Config struct {
-    WorkspaceRoot string              // 工作目录
-    Logging       LoggingConfig       // 日志配置
-    Planner       PlannerConfig       // Planner 配置
-    Server        ServerConfig       // 服务配置
-    Session       SessionConfig       // 会话配置
-    MCP           MCPConfig          // MCP 配置
-    KnowledgeBase KnowledgeBaseConfig // 知识库
-    Permissions   Permissions         // 权限配置
-}
-```
-
-### 8.2 配置加载流程
-
-```
-Load(configPath)
-  │
-  ├─ viper.ReadInConfig() → 读取 YAML
-  ├─ cfg.expandPaths() → 展开路径 (~/, 环境变量)
-  ├─ cfg.loadAPIKeyFromEnv() → 从环境变量加载 API Key
-  │   支持: BRUTECODE_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, ...
-  └─ cfg.Validate() → 验证配置
-```
-
-### 8.3 MCP 配置
+**位置**: `config.yaml`
 
 ```yaml
+workspace_root: ./
+
+logging:
+  level: info
+  file: ~/.local/share/morpheus/logs/morpheus.log
+
+planner:
+  provider: deepseek
+  model: deepseek-chat
+  temperature: 0.2
+  api_key: ${DEEPSEEK_API_KEY}
+
+server:
+  listen: :8080
+  remote:
+    enabled: true
+  limits:
+    enabled: true
+    max_cpu_percent: 85
+    max_memory_percent: 85
+
+session:
+  path: ~/.local/share/morpheus/sessions
+  sqlite_path: ~/.local/share/morpheus/sessions.db
+  retention: 720h
+
 mcp:
   servers:
     - name: filesystem
       transport: stdio
       command: npx -y @modelcontextprotocol/server-filesystem .
-    - name: remote
-      transport: http
-      url: https://example.com/mcp
-      sse_url: https://example.com/mcp/sse
-      auth_token: ${MCP_TOKEN}
+
+permissions:
+  confirm_above: high
+  confirm_protected_paths: [...]
+  risk_factors: {...}
+  auto_approve: false
 ```
 
-## 9. 架构流程图
+**配置优先级**:
 
-### 9.1 完整请求处理流程
+1. `./config.yaml`
+2. `~/.config/morpheus/config.yaml`
+3. `~/.morpheus/config.yaml`
 
-```
-┌─────────┐     ┌─────────────┐     ┌──────────────┐     ┌───────────────┐
-│  User   │────▶│    CLI/     │────▶│   Runtime    │────▶│  AgentLoop    │
-│ Input   │     │  API Server │     │  (Init)      │     │  (Execute)    │
-└─────────┘     └─────────────┘     └──────────────┘     └───────────────┘
-                                                                   │
-                                                                   ▼
-                             ┌──────────────────────────────────────────────┐
-                             │              Planner (LLM)                   │
-                             │  ┌────────────────────────────────────────┐  │
-                             │  │  1. Build System Prompt (tools)       │  │
-                             │  │  2. Build User Prompt (task + context) │  │
-                             │  │  3. HTTP Call to LLM API               │  │
-                             │  │  4. Parse Plan (steps)                 │  │
-                             │  └────────────────────────────────────────┘  │
-                             └──────────────────────────────────────────────┘
-                                            │
-                     ┌──────────────────────┼──────────────────────┐
-                     ▼                      ▼                      ▼
-           ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-           │   ExecuteStep   │   │   ExecuteStep   │   │   ExecuteStep   │
-           │   (Tool #1)     │   │   (Tool #2)     │   │   (Tool #N)     │
-           └────────┬────────┘   └────────┬────────┘   └────────┬────────┘
-                    │                      │                      │
-                    ▼                      ▼                      ▼
-           ┌───────────────────────────────────────────────────────────────┐
-           │                    Orchestrator                             │
-           │  1. Get Tool from Registry                                   │
-           │  2. Policy Check (cmd/fs)                                    │
-           │  3. Plugin Hook (Before)                                     │
-           │  4. Tool.Invoke()                                             │
-           │  5. Plugin Hook (After)                                      │
-           └───────────────────────────────────────────────────────────────┘
-                    │
-                    ▼
-           ┌─────────────────┐
-           │  Return Result  │
-           │  to AgentLoop   │
-           └────────┬────────┘
-                    │
-                    ▼
-           ┌───────────────────────────────────────────────────────────────┐
-           │  AgentLoop: Append result → Call LLM again (loop)           │
-           └───────────────────────────────────────────────────────────────┘
-                    │
-                    ▼                              ┌─────────────────────┐
-           ┌─────────────────┐                   │  Session Writer     │
-           │  Return Response │──────────────────▶│  (Persist to disk)  │
-           └─────────────────┘                   └─────────────────────┘
-```
+---
 
-### 9.2 工具执行详细流程
+## 六、REST API
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   ExecuteStep(sdk.PlanStep)                 │
-└────────────────────────────┬────────────────────────────────┘
-                             │
-                             ▼
-               ┌──────────────────────────────┐
-               │  registry.Get(step.Tool)     │
-               │  → sdk.Tool                  │
-               └──────────────┬───────────────┘
-                             │
-                             ▼
-               ┌──────────────────────────────┐
-               │  policy.checkPolicy()        │
-               │  → Allowed?                  │
-               └──────────────┬───────────────┘
-                             │
-               ┌──────────────┴───────────────┐
-               ▼                               ▼
-         ┌─────────────┐               ┌─────────────┐
-         │   Allowed   │               │  Rejected   │
-         └──────┬──────┘               └─────────────┘
-                │
-                ▼
-         ┌───────────────────────────────────┐
-         │  plugins.ApplyToolBefore()       │
-         │  → input = hook(ctx, input)      │
-         └───────────────┬─────────────────┘
-                         │
-                         ▼
-         ┌───────────────────────────────────┐
-         │  tool.Invoke(ctx, input)          │
-         │  → sdk.ToolResult                 │
-         └───────────────┬─────────────────┘
-                         │
-                         ▼
-         ┌───────────────────────────────────┐
-         │  plugins.ApplyToolAfter()         │
-         │  → result = hook(ctx, result)    │
-         └───────────────┬─────────────────┘
-                         │
-                         ▼
-         ┌───────────────────────────────────┐
-         │  return sdk.ToolResult            │
-         └───────────────────────────────────┘
-```
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/api/v1/chat` | 与 Agent 聊天 |
+| POST | `/api/v1/plan` | 生成计划 |
+| POST | `/api/v1/execute` | 执行计划 |
+| POST | `/api/v1/tasks` | 创建任务 |
+| GET | `/api/v1/tasks/{id}` | 获取任务状态 |
+| GET | `/api/v1/sessions` | 列出会话 |
+| GET | `/api/v1/sessions/{id}` | 获取会话 |
+| GET | `/api/v1/skills` | 列出技能 |
+| POST | `/api/v1/models/select` | 切换模型 |
+| GET | `/api/v1/models` | 列出模型 |
+| POST | `/repl` | REPL 端点 |
+| POST | `/repl/stream` | 流式 REPL |
 
-## 10. 扩展指南
+---
 
-### 10.1 添加新工具
+## 七、优势分析
 
-1. 实现 `sdk.Tool` 接口:
+### 7.1 架构设计优秀
+
+1. **清晰的关注点分离**
+   - Runtime 作为协调者，各子组件职责单一
+   - Tool Registry 模式便于扩展
+   - Plugin Hook 机制支持无侵入增强
+
+2. **多层次的可扩展性**
+   - Tools: 实现 `sdk.Tool` 接口即可添加新工具
+   - Plugins: 消息、系统提示、工具前后钩子
+   - Skills: 懒加载的技能系统
+   - Subagents: 自定义 Agent profile
+
+3. **安全第一的设计**
+   - Policy Engine 实现细粒度风险评估
+   - Protected paths 保护系统敏感区域
+   - 分级确认机制 (confirm_above 配置)
+
+### 7.2 功能完整性
+
+1. **MCP 协议完整支持** — stdio/HTTP/SSE 三种传输方式
+2. **多 LLM Provider 支持** — 覆盖 OpenAI 系、本地 Ollama、SambaNova 等 20+ 提供商
+3. **混合存储** — SQLite WAL + JSON 文件，双重保障
+4. **智能上下文压缩** — 60k token 阈值自动触发
+5. **DAG 任务调度** — 多 Agent 协作有依赖管理
+
+### 7.3 工程化水平
+
+1. **配置驱动** — Viper 支持多源配置和环境变量
+2. **结构化日志** — zap logger 带上下文
+3. **错误处理规范** — 统一的错误类型和传播
+4. **TUI + API 双入口** — 兼顾交互和程序化使用
+
+---
+
+## 八、劣势分析
+
+### 8.1 Runtime 单点问题
+
 ```go
-type MyTool struct { ... }
-
-func (t *MyTool) Name() string    { return "my.tool" }
-func (t *MyTool) Describe() string { return "Description" }
-func (t *MyTool) Schema() map[string]any { ... }
-func (t *MyTool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolResult, error) { ... }
+// internal/app/runtime.go:1-200 (4258行总长度)
+type Runtime struct {
+    // 12个核心组件全部在Runtime中直接实例化
+    conversation *convo.Manager
+    planner      sdk.Planner
+    orchestrator *execpkg.Orchestrator
+    // ... 全部是具体类型，非接口
+}
 ```
 
-2. 在 `buildAvailableTools()` 中注册:
+**问题**:
+
+- 4258行的 Runtime 类违背了**单一职责原则**
+- 所有组件直接在 Runtime 内部 `new`，无法单独测试
+- 接口依赖不足，难以替换实现（如换用不同的 planner 实现）
+
+### 8.2 初始化链路过重
+
+```
+newLogger → convo.NewManager → plugin.NewRegistry → loadSoulPrompt
+→ skill.NewLoader → mcp.NewManager → registry.NewRegistry
+→ buildAvailableTools → policy.NewPolicyEngine → buildPlanner
+```
+
+10步串行初始化，即使某些功能不用也会初始化（如 MCP Manager）。
+
+### 8.3 并发模型简单
+
 ```go
-fstool.NewMyTool(cfg.WorkspaceRoot)
+// internal/app/agent_loop.go
+for step := 0; step < maxAgentSteps; step++ {
+    // 串行执行每个 tool call
+    for _, tc := range toolCalls {
+        result := o.ExecuteStep(...)
+    }
+}
 ```
 
-### 10.2 添加 MCP 服务器
+- AgentLoop 内完全串行
+- Coordinator 的并发任务上限硬编码为3
+- 无协程池复用，频繁创建销毁 goroutine
 
-在 `config.yaml` 中配置:
-```yaml
-mcp:
-  servers:
-    - name: my-server
-      transport: stdio
-      command: npx -y my-mcp-server
+### 8.4 会话管理耦合
+
+```go
+// internal/session/writer.go & store.go
+type Writer struct { db *sql.DB }
+type Store struct { ... }
 ```
 
-### 10.3 添加新 Planner
+- Writer 和 Store 职责边界模糊
+- 事务边界不清晰
+- 无连接池管理
 
-1. 实现 `sdk.Planner` 接口
-2. 在 `buildPlanner()` 中添加 case
+### 8.5 错误处理不一致
 
-### 10.4 添加插件钩子
+各工具的错误返回形式不统一：
 
-1. 在 `plugin.Registry` 中添加新钩子类型
-2. 在对应位置调用钩子函数
+- 有的返回 error
+- 有的返回空 result + error
+- 缺少统一的 `Result` 类型
 
-## 11. 目录结构
+### 8.6 配置管理分散
 
-```
-internal/
-├── app/                    # 主应用逻辑
-│   ├── runtime.go          # Runtime 主入口
-│   ├── agent_loop.go       # Agent 循环执行
-│   ├── agent_loop_stream.go# 流式执行
-│   └── SOUL.go             # 系统提示加载
-├── planner/                # 规划器
-│   ├── llm/               # LLM 兼容 planner
-│   └── keyword/            # 关键词 planner
-├── exec/                   # 执行器
-│   └── orchestrator.go     # 步骤执行编排
-├── tools/                  # 工具实现
-│   ├── registry/           # 工具注册表
-│   ├── fs/                 # 文件系统工具
-│   ├── cmd/                # 命令执行工具
-│   ├── agenttool/          # Agent 工具
-│   ├── skilltool/         # 技能工具
-│   ├── ask/                # 问答工具
-│   ├── webfetch/           # 网页抓取
-│   ├── respond/            # 响应工具
-│   ├── lsp/                # LSP 工具
-│   ├── git/                # Git 工具
-│   └── mcp/                # MCP 协议支持
-├── convo/                  # 会话管理
-│   └── manager.go         # 内存会话管理
-├── session/                # 持久化
-│   └── writer.go          # 会话写入器
-├── policy/                 # 策略引擎
-│   └── engine.go          # 策略评估
-├── plugin/                 # 插件系统
-│   └── registry.go       # 钩子注册表
-├── skill/                  # 技能系统
-│   └── loader.go         # 技能加载
-├── config/                 # 配置系统
-│   └── config.go          # 配置加载
-├── configstore/           # 配置目录
-│   └── store.go           # 路径管理
-└── cli/                   # CLI 命令
-    ├── root.go            # 根命令
-    ├── serve.go           # API 服务
-    ├── repl.go            # REPL 模式
-    └── model_config.go    # 模型配置
+- 部分配置硬编码在代码中（如 maxAgentSteps=12, 60k token 阈值）
+- 配置项缺少 schema 验证
+- 无配置热更新机制
+
+---
+
+## 九、优化建议
+
+### 9.1 重构 Runtime — 引入依赖注入
+
+```go
+// 优化方向：使用选项模式 + 接口依赖
+type RuntimeOption func(*Runtime)
+
+type PlannerProvider interface {
+    GetPlanner(cfg config.PlannerConfig) (sdk.Planner, error)
+}
+
+func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
+    r := &Runtime{}
+    for _, opt := range opts {
+        opt(r)
+    }
+    return r, nil
+}
+
+// 便于测试时替换实现
+func WithPlanner(p sdk.Planner) RuntimeOption {
+    return func(r *Runtime) { r.planner = p }
+}
 ```
 
-## 12. 技术栈
+### 9.2 懒加载所有组件
 
-- **语言**: Go 1.25
-- **LLM SDK**: OpenAI API compatible (支持 glm/minmax/deepseek/gemini)
-- **日志**: zap
-- **配置**: viper + YAML
-- **Web 框架**: 标准库 net/http
-- **CLI 框架**: cobra
-- **协议**: MCP (Model Context Protocol)
+```go
+// 当前：10步串行初始化
+// 优化：按需初始化
+type Lazy[T any] struct {
+    init func() T
+    val  T
+    once sync.Once
+}
 
-## 13. 系统提示 (SOUL.md)
+func (l *Lazy[T]) Get() T {
+    l.once.Do(func() { l.val = l.init() })
+    return l.val
+}
+```
 
-Morpheus 的系统提示定义了其核心价值观和行为准则:
+### 9.3 引入 Worker Pool 并发模型
 
-- **立场**: 偏好清晰、系统、复利
-- **思考方式**: 定义术语、分解问题、检验假设
-- **沟通风格**: 清晰、直接、结构化、冷静
-- **边界**: 不伪装确定性、不鼓励有害行为
+```go
+// 优化 AgentLoop 内的 tool call 并发
+func (r *Runtime) executeToolCalls(ctx context.Context, calls []ToolCall) {
+    pool := make(chan struct{}, MaxConcurrentTools) // 可配置并发数
+    var wg sync.WaitGroup
+
+    for _, call := range calls {
+        wg.Add(1)
+        go func(c ToolCall) {
+            defer wg.Done()
+            pool <- struct{}{}
+            defer func() { <-pool }()
+            r.orchestrator.ExecuteStep(ctx, c)
+        }(call)
+    }
+    wg.Wait()
+}
+```
+
+### 9.4 统一结果类型
+
+```go
+// 建立统一的 Tool Result 抽象
+type Result[T any] struct {
+    Value   T
+    Error   *ToolError
+    Metrics ExecutionMetrics
+}
+
+type ToolError struct {
+    Code      ErrorCode
+    Message   string
+    Retryable bool
+}
+```
+
+### 9.5 配置集中 + Schema 验证
+
+```go
+// 硬编码值抽取到配置
+type AgentConfig struct {
+    MaxSteps          int `validate:"min=1,max=100"`
+    ContextTokenLimit int `validate:"min=1000"`
+    MaxConcurrent     int `validate:"min=1,max=10"`
+}
+
+// 使用 viper + JSON Schema 验证
+func LoadConfig(path string) (*Config, error) {
+    viper.SetConfigFile(path)
+    // 注册默认值
+    // 启用毒性检测
+}
+```
+
+### 9.6 指标与可观测性
+
+```go
+// 添加 OpenTelemetry 支持
+import "go.opentelemetry.io/otel"
+
+func (r *Runtime) ExecuteStep(ctx context.Context, step *Step) {
+    ctx, span := otel.Tracer("morpheus").Start(ctx, "ExecuteStep",
+        trace.WithAttributes(attribute.String("tool", step.Tool)))
+    defer span.End()
+    // ...
+}
+```
+
+### 9.7 会话存储抽象
+
+```go
+// 抽象存储接口，支持替换
+type SessionStore interface {
+    Save(ctx context.Context, s *Session) error
+    Get(ctx context.Context, id string) (*Session, error)
+    List(ctx context.Context, filter *SessionFilter) ([]*Session, error)
+}
+
+// 默认实现仍为 SQLite，但可替换为 Redis/PostgreSQL 等
+type SQLiteStore struct{ db *sql.DB }
+```
+
+---
+
+## 十、总结评分
+
+| 维度 | 评分 | 说明 |
+|------|------|------|
+| **架构设计** | 8/10 | 模块划分清晰，扩展点充足，但 Runtime 过于庞大 |
+| **安全性** | 9/10 | Policy Engine 设计优秀，多层防护 |
+| **可维护性** | 6/10 | 4258行 Runtime 难以维护，接口依赖不足 |
+| **性能** | 7/10 | 并发模型简单，连接池缺失 |
+| **可扩展性** | 8/10 | 插件/工具/技能系统设计良好 |
+| **工程化** | 7/10 | 结构化日志/配置驱动，但缺少单元测试框架 |
+| **总计** | **7.5/10** | 整体优秀，Runtime 重构是首要优化点 |
+
+---
+
+## 附录：关键文件索引
+
+| 组件 | 文件路径 |
+|------|----------|
+| Runtime | `internal/app/runtime.go` |
+| AgentLoop | `internal/app/agent_loop.go` |
+| Coordinator | `internal/app/coordinator.go` |
+| Orchestrator | `internal/exec/orchestrator.go` |
+| Policy Engine | `internal/policy/engine.go` |
+| Tool Registry | `internal/tools/registry/registry.go` |
+| Session | `internal/session/` |
+| Skills | `internal/skill/loader.go` |
+| MCP | `internal/tools/mcp/mcp.go` |
+| Plugin | `internal/plugin/registry.go` |
+| Config | `internal/config/` |
+| CLI | `internal/cli/` |
