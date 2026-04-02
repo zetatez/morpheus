@@ -141,7 +141,7 @@ func (c *Config) expandPaths() {
 	c.Session.Path = expandPath(c.Session.Path)
 	c.Session.SQLitePath = expandPath(c.Session.SQLitePath)
 	c.KnowledgeBase.Path = expandPath(c.KnowledgeBase.Path)
-	c.Planner.Endpoint = expandPath(c.Planner.Endpoint)
+	c.Planner.Endpoint = expandEnvValue(c.Planner.Endpoint)
 	c.Planner.APIKey = expandEnvValue(c.Planner.APIKey)
 	c.Planner.Provider = strings.ToLower(c.Planner.Provider)
 	c.Server.Remote.BearerToken = expandEnvValue(c.Server.Remote.BearerToken)
