@@ -432,14 +432,42 @@ permissions:
 
 - 引入 `WorkerPool`，可配置并发数
 - 工具调用支持并行执行
-- Coordinator 并发上限可配置化
-- 文件: `internal/exec/worker_pool.go`
+- Coordinator 并发上限可配置化 (`max_concurrent_tasks`)
+- 文件: `internal/exec/worker_pool.go`, `internal/app/coordinator.go`
+
+### 8.3.1 Coordinator 并发上限可配置化 ✅
+
+**文件**: `internal/app/coordinator.go`
+
+```go
+maxConcurrent := rt.cfg.Agent.MaxConcurrentTasks
+if maxConcurrent <= 0 {
+    maxConcurrent = 3
+}
+limit := make(chan struct{}, maxConcurrent)
+```
+
+配置项: `subagents.max_concurrent_tasks`，默认值为 3。
 
 ### 8.4 会话管理耦合 ✅ 已优化
 
 - 抽象 `SessionStore` 接口，职责边界清晰
 - 支持多种存储后端替换（SQLite/File）
-- 文件: `internal/session/store.go`
+- SQLite 连接池管理（`NewStoreWithPool`）
+- 文件: `internal/session/store.go`, `internal/session/store_sqlite.go`
+
+### 8.4.1 SQLite 连接池管理 ✅
+
+**文件**: `internal/session/store_sqlite.go`
+
+```go
+func NewStoreWithPool(path string, maxOpenConns int) (*Store, error) {
+    dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)", path)
+    db.SetMaxOpenConns(maxOpenConns)
+    db.SetMaxIdleConns(maxOpenConns / 2)
+    db.SetConnMaxLifetime(5 * time.Minute)
+}
+```
 
 ### 8.5 错误处理不一致 ✅ 已优化
 
@@ -454,13 +482,35 @@ permissions:
 - 各子配置独立验证函数
 - 文件: `internal/config/validation.go`
 
+### 8.6.1 配置热更新机制 ✅
+
+**文件**: `internal/config/hotreload.go`
+
+```go
+type HotReloader interface {
+    Reload(cfg Config) error
+}
+
+type ConfigWatcher struct {
+    viper    *viper.Viper
+    path     string
+    reloader HotReloader
+}
+
+func (w *ConfigWatcher) Start(ctx context.Context) error
+func (w *ConfigWatcher) checkAndReload()
+func (w *ConfigWatcher) Stop()
+```
+
+支持 fsnotify 文件监控 + 定时轮询两种模式。
+
 ---
 
 ## 九、优化记录
 
 ### 9.1 重构 Runtime — 引入依赖注入 ✅
 
-**文件**: `internal/app/lazy.go`
+**文件**: `internal/app/lazy.go`, `internal/app/runtime_builder.go`
 
 ```go
 type RuntimeOption func(*Runtime)
@@ -476,6 +526,20 @@ func WithConversationManager(c *convo.Manager) RuntimeOption {
 func WithOrchestrator(o *execpkg.Orchestrator) RuntimeOption {
     return func(r *Runtime) { r.orchestrator = o }
 }
+```
+
+**RuntimeBuilder** 提供构造时注入和懒加载支持：
+
+```go
+type RuntimeBuilder struct {
+    planner     *Lazy[sdk.Planner]
+    orchestrator *Lazy[*execpkg.Orchestrator]
+    // ...
+}
+
+func NewRuntimeBuilder(cfg config.Config) *RuntimeBuilder
+func (b *RuntimeBuilder) WithPlannerProvider(p sdk.Planner) *RuntimeBuilder
+func (b *RuntimeBuilder) Build(ctx context.Context) (*Runtime, error)
 ```
 
 ### 9.2 懒加载所有组件 ✅
@@ -610,13 +674,13 @@ type SessionBackend interface {
 
 | 维度 | 评分 | 说明 |
 |------|------|------|
-| **架构设计** | 9/10 | 选项模式 + 懒加载，扩展性大幅提升 |
+| **架构设计** | 9/10 | RuntimeBuilder + Lazy + Option 模式，扩展性大幅提升 |
 | **安全性** | 9/10 | Policy Engine 设计优秀，多层防护 |
-| **可维护性** | 8/10 | 统一结果类型 + 存储抽象，接口清晰 |
-| **性能** | 8/10 | Worker Pool 并发模型，可配置化 |
+| **可维护性** | 9/10 | 统一结果类型 + 存储抽象 + 热更新，接口清晰 |
+| **性能** | 9/10 | Worker Pool + SQLite 连接池，可配置化 |
 | **可扩展性** | 9/10 | 插件/工具/技能系统 + 依赖注入 |
-| **工程化** | 8/10 | 配置验证 + 可观测性支持 |
-| **总计** | **8.5/10** | 已完成所有优化项，整体质量显著提升 |
+| **工程化** | 9/10 | 配置验证 + 可观测性 + 热更新 |
+| **总计** | **9.0/10** | 已完成所有优化项，整体质量接近生产级 |
 
 ---
 
@@ -625,6 +689,7 @@ type SessionBackend interface {
 | 组件 | 文件路径 |
 |------|----------|
 | Runtime | `internal/app/runtime.go` |
+| Runtime Builder | `internal/app/runtime_builder.go` |
 | Runtime Options (DI) | `internal/app/lazy.go` |
 | Telemetry | `internal/app/telemetry.go` |
 | AgentLoop | `internal/app/agent_loop.go` |
@@ -641,6 +706,7 @@ type SessionBackend interface {
 | Plugin | `internal/plugin/registry.go` |
 | Config | `internal/config/` |
 | Config Validation | `internal/config/validation.go` |
+| Config Hot Reload | `internal/config/hotreload.go` |
 | SDK Types | `pkg/sdk/types.go` |
 | SDK Result | `pkg/sdk/result.go` |
 | CLI | `internal/cli/` |

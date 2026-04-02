@@ -190,7 +190,11 @@ func hasDependencies(tasks []coordinatorTask) bool {
 func runTasksParallel(ctx context.Context, rt *Runtime, sessionID string, tasks []coordinatorTask) []coordinatorResult {
 	results := make([]coordinatorResult, len(tasks))
 	var wg sync.WaitGroup
-	limit := make(chan struct{}, 3)
+	maxConcurrent := rt.cfg.Agent.MaxConcurrentTasks
+	if maxConcurrent <= 0 {
+		maxConcurrent = 3
+	}
+	limit := make(chan struct{}, maxConcurrent)
 	team := rt.ensureAgentTeam(sessionID)
 	ctx = withAgentTeam(ctx, team.ID)
 	for _, task := range tasks {

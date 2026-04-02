@@ -30,17 +30,27 @@ type StoredSession struct {
 }
 
 func NewStore(path string) (*Store, error) {
+	return NewStoreWithPool(path, 5)
+}
+
+func NewStoreWithPool(path string, maxOpenConns int) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
+	if maxOpenConns <= 0 {
+		maxOpenConns = 5
+	}
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxOpenConns / 2)
+	db.SetConnMaxLifetime(5 * time.Minute)
 	store := &Store{db: db}
 	if err := store.ensureSchema(context.Background()); err != nil {
 		_ = db.Close()

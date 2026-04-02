@@ -92,8 +92,9 @@ type Permissions struct {
 }
 
 type AgentConfig struct {
-	DefaultMode string            `mapstructure:"default_mode"`
-	Agents      []AgentDefinition `mapstructure:"agents"`
+	DefaultMode        string            `mapstructure:"default_mode"`
+	Agents             []AgentDefinition `mapstructure:"agents"`
+	MaxConcurrentTasks int               `mapstructure:"max_concurrent_tasks"`
 }
 
 type AgentDefinition struct {
@@ -245,6 +246,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("session.retention", "720h")
 	v.SetDefault("knowledge_base.path", filepath.Join(configHome, "knowledge_base"))
 	v.SetDefault("subagents.default_mode", "build")
+	v.SetDefault("subagents.max_concurrent_tasks", 3)
 }
 
 func defaultConfigHome() string {
