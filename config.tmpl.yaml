@@ -5,12 +5,29 @@ logging:
   file: ~/.local/share/morpheus/logs/morpheus.log
 
 planner:
-  # Provider options: openai, minmax, glm, gemini, deepseek, builtin
-  provider: MiniMax
+  # Provider options:
+  #   - openai: OpenAI API (env: OPENAI_API_KEY)
+  #   - minimax: MiniMax API (env: MINIMAX_API_KEY)
+  #   - glm: Zhipu GLM API (env: GLM_API_KEY)
+  #   - gemini: Google Gemini API (env: GEMINI_API_KEY)
+  #   - deepseek: DeepSeek API (env: DEEPSEEK_API_KEY)
+  #   - anthropic: Anthropic Claude API (env: ANTHROPIC_API_KEY)
+  #   - openrouter: OpenRouter API (env: OPENROUTER_API_KEY)
+  #   - azure: Azure OpenAI API (env: AZURE_API_KEY)
+  #   - groq: Groq API (env: GROQ_API_KEY)
+  #   - mistral: Mistral API (env: MISTRAL_API_KEY)
+  #   - cohere: Cohere API (env: COHERE_API_KEY)
+  #   - togetherai: TogetherAI API (env: TOGETHERAI_API_KEY)
+  #   - perplexity: Perplexity API (env: PERPLEXITY_API_KEY)
+  #   - ollama: Ollama local API (env: OLLAMA_API_KEY)
+  #   - lmstudio: LM Studio local API (env: LMSTUDIO_API_KEY)
+  #   - openai-compatible: Custom OpenAI-compatible API (env: OPENAI_COMPATIBLE_API_KEY)
+  #   - builtin: Built-in keyword planner (no API key required)
+  provider: minimax
   model: MiniMax-M2.7
   temperature: 0.2
   api_key: ${MINIMAX_API_KEY}
-  # endpoint: https://api.minimax.io/anthropic/v1 (默认)
+  # endpoint: https://api.minimax.io/v1/chat/completions (optional, defaults vary by provider)
 
 server:
   listen: :8080

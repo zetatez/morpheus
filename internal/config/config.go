@@ -163,10 +163,23 @@ func (c *Config) loadAPIKeyFromEnv() {
 	}
 
 	providerEnvMap := map[string]string{
-		"openai":   "OPENAI_API_KEY",
-		"deepseek": "DEEPSEEK_API_KEY",
-		"minmax":   "MINMAX_API_KEY",
-		"glm":      "GLM_API_KEY",
+		"openai":            "OPENAI_API_KEY",
+		"deepseek":          "DEEPSEEK_API_KEY",
+		"minimax":           "MINIMAX_API_KEY",
+		"minmax":            "MINIMAX_API_KEY",
+		"glm":               "GLM_API_KEY",
+		"gemini":            "GEMINI_API_KEY",
+		"anthropic":         "ANTHROPIC_API_KEY",
+		"openrouter":        "OPENROUTER_API_KEY",
+		"azure":             "AZURE_API_KEY",
+		"groq":              "GROQ_API_KEY",
+		"mistral":           "MISTRAL_API_KEY",
+		"cohere":            "COHERE_API_KEY",
+		"togetherai":        "TOGETHERAI_API_KEY",
+		"perplexity":        "PERPLEXITY_API_KEY",
+		"ollama":            "OLLAMA_API_KEY",
+		"lmstudio":          "LMSTUDIO_API_KEY",
+		"openai-compatible": "OPENAI_COMPATIBLE_API_KEY",
 	}
 	if envName, ok := providerEnvMap[c.Planner.Provider]; ok {
 		if key := os.Getenv(envName); key != "" {

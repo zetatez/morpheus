@@ -97,10 +97,10 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	switch plannerCfg.Provider {
-	case "openai", "glm", "deepseek":
+	case "openai", "glm", "deepseek", "anthropic", "openrouter", "groq", "mistral", "togetherai", "perplexity":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
-	case "minmax":
-		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minimax", "minmax":
+		httpReq.Header.Set("x-api-key", plannerCfg.APIKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 

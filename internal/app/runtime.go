@@ -1600,19 +1600,30 @@ func extractTopJSONKeys(text string) []string {
 }
 
 func buildPlanner(cfg config.PlannerConfig) (sdk.Planner, error) {
-	switch cfg.Provider {
-	case "openai", "minmax", "glm", "gemini", "deepseek":
-		if cfg.APIKey == "" {
-			return nil, fmt.Errorf("%s provider requires api_key in config", cfg.Provider)
-		}
-		model := cfg.Model
-		if model == "" {
-			model = defaultModel(cfg.Provider)
-		}
-		return openai.NewPlanner(cfg.APIKey, model, cfg.Temperature, cfg.Provider, cfg.Endpoint), nil
-	default:
+	providerName := strings.ToLower(cfg.Provider)
+
+	if providerName == "builtin" || providerName == "keyword" {
 		return keyword.NewPlanner(), nil
 	}
+
+	factory, ok := llm.GetProvider(providerName)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider: %s. Available providers: %v", cfg.Provider, llm.ListProviders())
+	}
+
+	model := cfg.Model
+	if model == "" {
+		model = defaultModel(providerName)
+	}
+
+	plannerConfig := llm.PlannerProviderConfig{
+		APIKey:      cfg.APIKey,
+		Model:       model,
+		Endpoint:    cfg.Endpoint,
+		Temperature: cfg.Temperature,
+	}
+
+	return factory(plannerConfig)
 }
 
 func (rt *Runtime) UpdatePlanner(cfg config.PlannerConfig) error {
@@ -2346,10 +2357,10 @@ func (rt *Runtime) generateSummary(ctx context.Context, prompt string) (string, 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	switch plannerCfg.Provider {
-	case "openai", "glm", "deepseek":
+	case "openai", "glm", "deepseek", "anthropic", "openrouter", "groq", "mistral", "togetherai", "perplexity":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
-	case "minmax":
-		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minimax", "minmax":
+		httpReq.Header.Set("x-api-key", plannerCfg.APIKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 
@@ -2870,7 +2881,7 @@ func defaultModel(provider string) string {
 	switch provider {
 	case "openai":
 		return "gpt-4o-mini"
-	case "minmax":
+	case "minimax", "minmax":
 		return "abab6.5s-chat"
 	case "glm":
 		return "glm-4-flash"
@@ -2878,6 +2889,28 @@ func defaultModel(provider string) string {
 		return "gemini-2.0-flash"
 	case "deepseek":
 		return "deepseek-chat"
+	case "anthropic":
+		return "claude-sonnet-4-5"
+	case "openrouter":
+		return "openai/gpt-4o"
+	case "azure":
+		return "gpt-4o"
+	case "ollama":
+		return "llama3.2"
+	case "lmstudio":
+		return "local-model"
+	case "groq":
+		return "mixtral-8x7b-32768"
+	case "mistral":
+		return "mistral-large-latest"
+	case "cohere":
+		return "command-r-plus"
+	case "togetherai":
+		return "meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo"
+	case "perplexity":
+		return "llama-3.1-sonar-large-128k-online"
+	case "openai-compatible":
+		return "default"
 	default:
 		return "gpt-4o-mini"
 	}
@@ -2885,14 +2918,28 @@ func defaultModel(provider string) string {
 
 func chatEndpoint(provider string) string {
 	switch provider {
-	case "minmax":
-		return "https://api.minimax.io/anthropic/v1/messages"
+	case "minimax", "minmax":
+		return "https://api.minimaxi.com/anthropic/v1/messages"
 	case "glm":
 		return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 	case "gemini":
 		return "https://generativelanguage.googleapis.com/v1beta/models"
 	case "deepseek":
 		return "https://api.deepseek.com/v1/chat/completions"
+	case "anthropic":
+		return "https://api.anthropic.com/v1/messages"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1/chat/completions"
+	case "groq":
+		return "https://api.groq.com/openai/v1/chat/completions"
+	case "mistral":
+		return "https://api.mistral.ai/v1/chat/completions"
+	case "cohere":
+		return "https://api.cohere.ai/v2/chat"
+	case "togetherai":
+		return "https://api.together.ai/v1/chat/completions"
+	case "perplexity":
+		return "https://api.perplexity.ai/chat/completions"
 	default:
 		return "https://api.openai.com/v1/chat/completions"
 	}

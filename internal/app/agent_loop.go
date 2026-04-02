@@ -586,16 +586,39 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		model = defaultModel(plannerCfg.Provider)
 	}
 
-	payload := map[string]any{"model": model, "messages": messages, "temperature": plannerCfg.Temperature}
-	if plannerCfg.Provider == "minmax" {
+	var payload map[string]any
+	if plannerCfg.Provider == "minimax" || plannerCfg.Provider == "minmax" {
+		var systemPrompt string
+		var userMsgs []map[string]any
+		for _, msg := range messages {
+			if msg["role"] == "system" {
+				if systemPrompt != "" {
+					systemPrompt += "\n"
+				}
+				systemPrompt += msg["content"].(string)
+			} else {
+				userMsgs = append(userMsgs, msg)
+			}
+		}
+		payload = map[string]any{
+			"model":       model,
+			"messages":    userMsgs,
+			"system":      systemPrompt,
+			"temperature": 0.4,
+			"top_p":       0.9,
+			"max_tokens":  4096,
+		}
+	} else {
+		payload = map[string]any{"model": model, "messages": messages}
+		payload["temperature"] = plannerCfg.Temperature
 		payload["max_tokens"] = 4096
-	}
-	if len(tools) > 0 {
-		payload["tools"] = tools
-		if toolChoice != nil {
-			payload["tool_choice"] = toolChoice
-		} else {
-			payload["tool_choice"] = "auto"
+		if len(tools) > 0 {
+			payload["tools"] = tools
+			if toolChoice != nil {
+				payload["tool_choice"] = toolChoice
+			} else {
+				payload["tool_choice"] = "auto"
+			}
 		}
 	}
 	body, err := json.Marshal(payload)
@@ -611,12 +634,11 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		return chatResponse{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	fmt.Printf("DEBUG callChatWithToolsStream: Provider=%q, APIKey=%q, Endpoint=%q\n", plannerCfg.Provider, plannerCfg.APIKey, endpoint)
 	switch plannerCfg.Provider {
-	case "openai", "glm", "deepseek":
+	case "openai", "glm", "deepseek", "anthropic", "openrouter", "groq", "mistral", "togetherai", "perplexity":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
-	case "minmax":
-		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)
+	case "minimax", "minmax":
+		httpReq.Header.Set("x-api-key", plannerCfg.APIKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 	}
 	resp, err := http.DefaultClient.Do(httpReq)
@@ -639,7 +661,7 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		CompletionTokens int
 		TotalTokens      int
 	}
-	if plannerCfg.Provider == "minmax" {
+	if plannerCfg.Provider == "minimax" || plannerCfg.Provider == "minmax" {
 		out, usage, err = parseAnthropicResponse(respBody)
 	} else {
 		out, usage, err = parseOpenAIResponse(respBody)
