@@ -19,11 +19,11 @@ export function StatusBar(props: StatusBarProps) {
       <box flexGrow={1} />
       <text fg={theme.muted}>session {props.sessionID}</text>
       <box paddingLeft={3} />
-      <text fg={theme.muted}>↑ {formatToken(props.serverMetrics?.input_tokens ?? 0)}</text>
-      <box paddingLeft={2} />
-      <text fg={theme.muted}>↓ {formatToken(props.serverMetrics?.output_tokens ?? 0)}</text>
-      <box paddingLeft={2} />
-      <text fg={theme.muted}>$ {props.serverMetrics?.cost?.toFixed(4) ?? "0.0000"}</text>
+      <text fg={theme.muted}>↑{formatToken(props.serverMetrics?.input_tokens ?? 0)}</text>
+      <box paddingLeft={1} />
+      <text fg={theme.muted}>↓{formatToken(props.serverMetrics?.output_tokens ?? 0)}</text>
+      <box paddingLeft={1} />
+      <text fg={theme.muted}>${props.serverMetrics?.cost?.toFixed(3) ?? "0.000"}</text>
     </box>
   )
 }

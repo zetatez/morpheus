@@ -1799,7 +1799,7 @@ export function App(props) {
           {currentModel() && <text fg={theme.muted}> · {currentModel()}</text>}
           {activeRunBanner() && <text fg={theme.muted}> · {activeRunBanner()}</text>}
           <box flexGrow={1}/>
-          {notification() ? (<text fg={theme.success}>{notification()}</text>) : (<text fg={theme.muted}>⚡{serverMetrics()?.resource?.cpu_percent?.toFixed(0) ?? "-"}% 💾{serverMetrics()?.resource?.mem_percent?.toFixed(0) ?? "-"}%</text>)}
+          {notification() ? (<text fg={theme.success}>{notification()}</text>) : (<text fg={theme.muted}>▣ {serverMetrics()?.resource?.cpu_percent?.toFixed(0) ?? "-"}%  ▤ {serverMetrics()?.resource?.mem_percent?.toFixed(0) ?? "-"}%</text>)}
         </box>
         {attachments().length > 0 && (<box flexDirection="row" paddingBottom={1} flexWrap="wrap">
             <For each={attachments()}>

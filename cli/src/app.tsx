@@ -1880,7 +1880,7 @@ export function App(props: AppProps) {
           {notification() ? (
             <text fg={theme.success}>{notification()}</text>
           ) : (
-            <text fg={theme.muted}>⚡{serverMetrics()?.resource?.cpu_percent?.toFixed(0) ?? "-"}% 💾{serverMetrics()?.resource?.mem_percent?.toFixed(0) ?? "-"}%</text>
+            <text fg={theme.muted}>▣ {serverMetrics()?.resource?.cpu_percent?.toFixed(0) ?? "-"}%  ▤ {serverMetrics()?.resource?.mem_percent?.toFixed(0) ?? "-"}%</text>
           )}
         </box>
         {attachments().length > 0 && (
