@@ -67,8 +67,8 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 		"temperature": plannerCfg.Temperature,
 		"stream":      true,
 	}
-	if plannerCfg.Provider == "minmax" {
-		payload["max_tokens"] = 4096
+	if plannerCfg.Provider == "minimax" || plannerCfg.Provider == "minmax" {
+		payload["max_tokens"] = 2048
 	}
 	if len(tools) > 0 {
 		payload["tools"] = tools

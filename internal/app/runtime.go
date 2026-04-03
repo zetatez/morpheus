@@ -665,7 +665,10 @@ func (rt *Runtime) maybeCreateCheckpoint(ctx context.Context, sessionID, toolNam
 		return
 	}
 	state.mu.Lock()
-	stale := append([]session.CheckpointMetadata(nil), state.entries[max(0, maxCheckpointsPerSession-1):]...)
+	var stale []session.CheckpointMetadata
+	if len(state.entries) >= maxCheckpointsPerSession {
+		stale = append(stale, state.entries[maxCheckpointsPerSession-1:]...)
+	}
 	state.entries = append([]session.CheckpointMetadata{checkpoint}, state.entries...)
 	if len(state.entries) > maxCheckpointsPerSession {
 		state.entries = state.entries[:maxCheckpointsPerSession]
