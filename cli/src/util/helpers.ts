@@ -10,4 +10,12 @@ export function formatToken(count: number): string {
   return count.toString()
 }
 
+export type AttachmentInput = {
+  path?: string
+  url?: string
+  name?: string
+  kind?: string
+  mime?: string
+}
+
 

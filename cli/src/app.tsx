@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { InputRenderable, PasteEvent, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
-import { sha256Hex, formatToken } from "./util/helpers"
+import { sha256Hex, formatToken, type AttachmentInput } from "./util/helpers"
 import { Selection } from "./util/selection"
 import { Clipboard } from "./util/clipboard"
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises"
