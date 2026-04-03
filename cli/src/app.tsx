@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount } from "solid-js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { InputRenderable, PasteEvent, ScrollBoxRenderable, TextAttributes, TextareaRenderable } from "@opentui/core"
-import { createHash } from "crypto"
+import { InputRenderable, PasteEvent, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+import { sha256Hex, formatToken, type AttachmentInput } from "./util/helpers"
 import { Selection } from "./util/selection"
 import { Clipboard } from "./util/clipboard"
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises"
@@ -32,10 +32,12 @@ import {
   type SSHInfoResponse,
 } from "./api"
 import { formatToolOutput } from "./format"
-import { renderMarkdownLines } from "./markdown"
 import type { Entry } from "./types"
 import { parseTranscriptToEntries } from "./transcript"
 import { theme } from "./theme"
+import { StatusBar, ChatEntries } from "./components/ChatComponents"
+import { TodoList } from "./components/TodoComponents"
+import { Modal } from "./components/ModalComponent"
 
 type AppProps = {
   apiUrl: string
@@ -55,24 +57,6 @@ type ModalItem = {
   provider?: string
   model?: string
   hasToken?: boolean
-}
-
-function sha256Hex(content: string): string {
-  return createHash("sha256").update(content).digest("hex")
-}
-
-function formatToken(count: number): string {
-  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}K`
-  return count.toString()
-}
-
-type AttachmentInput = {
-  path?: string
-  url?: string
-  name?: string
-  kind?: string
-  mime?: string
 }
 
 const parseAttachmentPaths = (text: string): AttachmentInput[] => {
@@ -1806,221 +1790,47 @@ export function App(props: AppProps) {
 
   return (
     <box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
-      <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-        <text fg={theme.muted}>{apiUrl()}</text>
-        <box flexGrow={1} />
-        <text fg={theme.muted}>session {sessionID()}</text>
-        <box paddingLeft={3} />
-        <text fg={theme.muted}>↑ {formatToken(serverMetrics()?.input_tokens ?? 0)}</text>
-        <box paddingLeft={2} />
-        <text fg={theme.muted}>↓ {formatToken(serverMetrics()?.output_tokens ?? 0)}</text>
-        <box paddingLeft={2} />
-        <text fg={theme.muted}>$ {serverMetrics()?.cost?.toFixed(4) ?? "0.0000"}</text>
-      </box>
+      <StatusBar
+        apiUrl={apiUrl()}
+        sessionID={sessionID()}
+        serverMetrics={serverMetrics()}
+        agentMode={agentMode()}
+      />
       <box flexDirection="row" height={contentHeight()}>
-        <scrollbox
-          ref={(val: ScrollBoxRenderable) => (scroll = val)}
-          width={mainPanelWidth()}
-          height={contentHeight()}
-          paddingLeft={2}
-          paddingRight={2}
-          paddingTop={1}
-        >
-          <For each={entries()}>
-          {(entry) => (
-            <box flexDirection="column" paddingBottom={1}>
-              {(entry.role === "tool" || entry.role === "error") && entry.title && (
-                <text
-                  fg={entry.role === "error" ? theme.error : theme.tool}
-                  attributes={TextAttributes.BOLD}
-                >
-                  {entry.role === "tool" ? entry.title ?? "Tool" : "Error"}
-                </text>
-              )}
-              {entry.role === "assistant" ? (
-                <box flexDirection="column">
-                  <For
-                    each={renderMarkdownLines(entry.content, {
-                      text: theme.text,
-                      muted: theme.thinking,
-                      code: theme.primary,
-                      success: theme.success,
-                      output: theme.output,
-                      file: theme.file,
-                      accent: theme.tool,
-                      error: theme.error,
-                      thinking: theme.thinking,
-                    })}
-                  >
-                    {(line) => (
-                      <text fg={line.fg ?? theme.text} attributes={line.attributes}>
-                        {line.text}
-                      </text>
-                    )}
-                  </For>
-                </box>
-              ) : entry.role === "tool" ? (
-                <box flexDirection="column">
-                  {(() => {
-                    const lines = renderMarkdownLines(entry.content ?? "", {
-                      text: theme.muted,
-                      muted: theme.muted,
-                      code: theme.muted,
-                      success: theme.success,
-                      output: theme.muted,
-                      file: theme.file,
-                      accent: theme.tool,
-                      error: theme.error,
-                      thinking: theme.thinking,
-                    })
-                    const maxLines = 12
-                    const expanded = isToolExpanded(entry.id)
-                    const visible = expanded ? lines : lines.slice(0, maxLines)
-                    const hiddenCount = lines.length - visible.length
-
-                    return (
-                      <box flexDirection="column">
-                        <For each={visible}>
-                          {(line) => (
-                            <text fg={line.fg ?? theme.text} attributes={line.attributes}>
-                              {line.text}
-                            </text>
-                          )}
-                        </For>
-                        {lines.length > maxLines && !expanded && (
-                          <text
-                            fg={theme.muted}
-                            attributes={TextAttributes.BOLD}
-                            onMouseDown={() => toggleToolExpanded(entry.id)}
-                          >
-                            … {hiddenCount} more (click to expand)
-                          </text>
-                        )}
-                        {lines.length > maxLines && expanded && (
-                          <text
-                            fg={theme.muted}
-                            attributes={TextAttributes.BOLD}
-                            onMouseDown={() => toggleToolExpanded(entry.id)}
-                          >
-                            Collapse output
-                          </text>
-                        )}
-                      </box>
-                    )
-                  })()}
-                </box>
-              ) : entry.role === "queue" ? (
-                <box flexDirection="column">
-                  <For each={renderMarkdownLines(entry.content ?? "", {
-                    text: theme.muted,
-                    muted: theme.muted,
-                    code: theme.muted,
-                    success: theme.success,
-                    output: theme.muted,
-                    file: theme.file,
-                    accent: theme.muted,
-                    error: theme.error,
-                    thinking: theme.thinking,
-                  })}>
-                    {(line) => <text fg={line.fg ?? theme.muted} attributes={line.attributes}>{line.text}</text>}
-                  </For>
-                </box>
-              ) : (
-                <text fg={entry.role === "user" ? theme.user : entry.role === "error" ? theme.error : entry.role === "system" ? theme.system : entry.kind === "thinking" ? theme.thinking : entry.kind === "summary" ? theme.summary : theme.text} attributes={entry.kind === "summary" ? TextAttributes.BOLD : entry.kind === "thinking" ? TextAttributes.ITALIC : TextAttributes.NONE}>{entry.content}</text>
-              )}
-            </box>
-          )}
-          </For>
-        </scrollbox>
+        <ChatEntries
+          entries={entries()}
+          isToolExpanded={isToolExpanded}
+          onToggleTool={toggleToolExpanded}
+          mainPanelWidth={mainPanelWidth()}
+          contentHeight={contentHeight()}
+          scrollRef={(val: ScrollBoxRenderable) => (scroll = val)}
+        />
         {activeTodos().length > 0 && (
-          <box width={todoPanelWidth()} height={contentHeight()} flexDirection="column" paddingLeft={1} paddingRight={2} paddingTop={1} backgroundColor={theme.todoPanel}>
-            <text fg={theme.primary} attributes={TextAttributes.BOLD}># Todos</text>
-            <box paddingBottom={1} />
-            <For each={activeTodos()}>
-              {(todo) => {
-                const note = () => todo.note ? `  ${todo.note}` : todo.status === "failed" ? "  Retry or update with todo.write" : ""
-                return (
-                  <box flexDirection="column" paddingBottom={1}>
-                    <text fg={todoLineColor(todo, todoPulse())} attributes={todo.active ? TextAttributes.BOLD : TextAttributes.NONE}>
-                      {`${todo.status === "completed" ? "[x]" : todo.status === "in_progress" ? (todoPulse() ? "[•]" : "[>]" ) : todo.status === "failed" ? "[!]" : todo.status === "cancelled" ? "[-]" : "[ ]"} ${todo.content}${todo.tool ? ` (${todo.tool})` : ""}`}
-                    </text>
-                    {note() && <text fg={todo.status === "failed" ? theme.todoFailed : theme.muted}>{note()}</text>}
-                  </box>
-                )
-              }}
-            </For>
-          </box>
+          <TodoList
+            todos={activeTodos()}
+            todoPulse={todoPulse()}
+            panelWidth={todoPanelWidth()}
+            contentHeight={contentHeight()}
+          />
         )}
       </box>
-      {modal() && (
-        <box width={width()} height={height()} justifyContent="center" alignItems="center">
-          <box
-            width={Math.min(80, width() - 4)}
-            flexDirection="column"
-            paddingLeft={2}
-            paddingRight={2}
-            paddingTop={1}
-            paddingBottom={1}
-            backgroundColor={theme.panel}
-          >
-            <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-              {modalCountLabel()}
-            </text>
-            <text fg={theme.muted}>{modalHint()}</text>
-            <input
-              ref={(val: InputRenderable) => (modalInputRef = val)}
-              value={modalInput()}
-              focused={true}
-              placeholder={
-                modal() === "connect" || modal() === "modelToken"
-                  ? "Enter value"
-                  : modal() === "confirm"
-                    ? "Type approve/deny"
-                    : "Search"
-              }
-              textColor={theme.text}
-              focusedTextColor={theme.text}
-              cursorColor={theme.primary}
-              onInput={(value) => updateModalQuery(value)}
-              onSubmit={(value) => handleModalSubmit(typeof value === "string" ? value : modalInput())}
-            />
-            {modalQuery() && <text fg={theme.text}>query: {modalQuery()}</text>}
-            {modal() === "runs" && <text fg={theme.muted}>Filter by status: running, waiting_user, timed_out, failed, cancelled · Type status or use quick filters</text>}
-            {modal() === "runs" && (
-              <text fg={theme.muted}>{`Quick filters: ${runsStatusFilter() === "" ? "[all]" : "all"} ${runsStatusFilter() === "running" ? "[running]" : "running"} ${runsStatusFilter() === "waiting_user" ? "[waiting_user]" : "waiting_user"} ${runsStatusFilter() === "failed" ? "[failed]" : "failed"} ${runsStatusFilter() === "timed_out" ? "[timed_out]" : "timed_out"} ${runsStatusFilter() === "cancelled" ? "[cancelled]" : "cancelled"} · Enter to open · d for details`}</text>
-            )}
-            {modal() === "timeline" && <text fg={theme.muted}>{runTimelineID() ? `Run: ${runTimelineID()}` : "Timeline"}</text>}
-            <scrollbox height={modalListHeight()} paddingLeft={1} paddingRight={1}>
-              {modal() === "timeline" ? (
-                <text fg={theme.text}>{runTimeline() ?? "No timeline available."}</text>
-              ) : <For each={modalWindow().items}>
-                {(item, index) => {
-                  const selected = () => modalWindow().start + index() === modalSelected()
-                  const prefix = () => (selected() ? ">" : " ")
-                  const current = () => modal() === "sessions" && item.id === sessionID()
-                  const number = () => modalWindow().start + index() + 1
-                  const statusIcon = () => {
-                    if (item.status === "timed_out") return "⏱"
-                    if (item.status === "failed") return "✖"
-                    if (item.status === "cancelled") return "◌"
-                    if (item.status === "waiting_user") return "?"
-                    if (item.status === "waiting_tool") return "…"
-                    if (item.status === "running") return "▶"
-                    return "•"
-                  }
-                  return (
-                    <text fg={selected() ? theme.primary : theme.text}>
-                      {`${prefix()} ${number()}. ${statusIcon()} ${item.title}${current() ? " (current)" : ""}${item.subtitle ? ` · ${item.subtitle}` : ""}${item.meta ? `\n    ${item.meta}` : ""}`}
-                    </text>
-                  )
-                }}
-              </For>}
-            </scrollbox>
-            {modal() === "runs" && runsNextCursor() && <text fg={theme.muted}>More runs available. Press `l` to load more.</text>}
-            {modalError() && <text fg={theme.error}>{modalError()}</text>}
-          </box>
-        </box>
-      )}
+      <Modal
+        modal={modal()}
+        modalTitle={modalTitle()}
+        modalHint={modalHint()}
+        modalQuery={modalQuery()}
+        modalItems={modalItems()}
+        modalSelected={modalSelected()}
+        modalInput={modalInput()}
+        modalInputRef={modalInputRef}
+        runsStatusFilter={runsStatusFilter()}
+        runTimeline={runTimeline()}
+        runTimelineID={runTimelineID()}
+        onQueryChange={updateModalQuery}
+        onSubmit={handleModalSubmit}
+        width={width()}
+        height={height()}
+      />
       <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
         <box flexDirection="row" paddingBottom={2}>
           <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
