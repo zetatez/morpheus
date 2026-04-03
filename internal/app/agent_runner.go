@@ -19,6 +19,45 @@ const (
 	maxReflectionSuggestions = 3
 )
 
+var parallelSafeTools = map[string]struct{}{
+	"fs.read":    {},
+	"fs.glob":    {},
+	"fs.grep":    {},
+	"web.fetch":  {},
+	"git.status": {},
+	"git.diff":   {},
+	"git.log":    {},
+	"git.branch": {},
+	"lsp.query":  {},
+	"mcp.query":  {},
+}
+
+var sequentialOnlyTools = map[string]struct{}{
+	"conversation.ask":  {},
+	"conversation.echo": {},
+	"todo.write":        {},
+	"agent.run":         {},
+	"agent.coordinate":  {},
+	"skill.invoke":      {},
+	"fs.write":          {},
+	"fs.edit":           {},
+	"fs.mkdir":          {},
+	"fs.mv":             {},
+	"fs.cp":             {},
+	"fs.rm":             {},
+	"cmd.exec":          {},
+}
+
+func isParallelSafeTool(toolName string) bool {
+	if _, ok := sequentialOnlyTools[toolName]; ok {
+		return false
+	}
+	if _, ok := parallelSafeTools[toolName]; ok {
+		return true
+	}
+	return false
+}
+
 type reflectionState struct {
 	consecutiveFailures  int
 	consecutiveSuccesses int
@@ -225,7 +264,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 		return Response{Plan: plan, Results: results, Reply: resp.Content}, nil
 	}
 
-	for step := 0; step < maxAgentSteps; step++ {
+	for step := 0; step < rt.effectiveMaxAgentSteps(); step++ {
 		rt.logger.Info("runAgentLoopWithRun loop iteration", zap.String("run_id", run.ID), zap.Int("step", step+1))
 		if err := ctx.Err(); err != nil {
 			plan.Status = sdk.PlanStatusBlocked
@@ -315,168 +354,272 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 		baseMessages = append(baseMessages, assistantMessage)
 		run.Messages = cloneMessages(baseMessages)
 
-		for _, call := range resp.ToolCalls {
-			toolName := nameMap[call.Name]
-			if toolName == "" {
-				toolName = call.Name
-			}
-			fingerprint := actionFingerprint(toolName, call.Arguments)
-			actionRepeats[fingerprint]++
-			if actionRepeats[fingerprint] > 2 {
-				loopErr := fmt.Errorf("detected repeated tool call for %s; stopping to avoid a loop", toolName)
-				finishRun(run, RunStatusFailed, "Stopped to avoid repeating the same failing step.", loopErr)
-				run.Plan = plan
-				run.Results = results
-				rt.finalizeRun(run, cb.emit, "run_loop_detected", map[string]any{"tool": toolName, "reply": run.Reply, "error": loopErr.Error()})
-				return Response{Plan: plan, Results: results, Reply: run.Reply}, loopErr
-			}
-			run.LastStep = fmt.Sprintf("tool:%s", toolName)
-			run.Status = RunStatusWaitingTool
-			if cb.onToolPending != nil {
-				cb.onToolPending(toolName, call)
-			}
-			if cb.onRunEvent != nil {
-				cb.onRunEvent("tool_execution_started", map[string]any{"tool": toolName, "call_id": call.ID, "timeout_ms": run.ToolTimeout.Milliseconds()})
-			}
-			markTodoInProgress(rt, run, toolName, cb.emit)
-			stepID := uuid.NewString()
-			planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: call.Arguments, Status: sdk.StepStatusRunning}
-			toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)
-			result, execErr := rt.orchestrator.ExecuteStep(toolCtx, sessionID, planStep)
-			toolCancel()
-			rt.maybeCreateCheckpoint(ctx, sessionID, toolName, call.Arguments)
-			result.StepID = stepID
-			if execErr != nil {
-				if confirmErr, ok := exec.IsConfirmationRequired(execErr); ok {
-					pending := pendingConfirmation{Tool: confirmErr.Tool, Inputs: confirmErr.Inputs, Decision: confirmErr.Decision}
-					rt.setPendingConfirmation(sessionID, pending)
-					question := formatConfirmationPrompt(pending)
-					_, _ = rt.appendMessage(ctx, sessionID, "assistant", question, nil)
-					plan.Status = sdk.PlanStatusDone
-					_ = rt.audit.Record(planReq, plan, results)
-					_ = rt.persistSession(ctx, sessionID)
-					payload := confirmationPayload(pending)
-					finishRun(run, RunStatusWaitingUser, question, nil)
-					run.Plan = plan
-					run.Results = results
-					run.Confirmation = payload
-					rt.finalizeRun(run, cb.emit, "run_waiting_user", map[string]any{"reply": question, "confirmation": payload})
-					return Response{Plan: plan, Results: results, Reply: question, Confirmation: payload}, nil
-				}
-				result.Success = false
-				result.Error = execErr.Error()
-			}
-			result.Data = rt.truncateToolResult(ctx, sessionID, planStep.Tool, result.Data)
-			if route == routeFreshInfo && toolName == "web.fetch" {
-				freshInfoFetches++
-				if result.Success {
-					freshInfoSuccessfulFetches++
-				}
-			}
-			results = append(results, result)
-			run.Results = results
-			if result.Success {
-				planStep.Status = sdk.StepStatusSucceeded
-			} else {
-				planStep.Status = sdk.StepStatusFailed
-			}
-			advanceTodosFromTool(rt, run, toolName, result.Success, cb.emit)
-			plan.Steps = append(plan.Steps, planStep)
-			if cb.onToolResult != nil {
-				cb.onToolResult(toolName, call.ID, planStep, result)
-			}
-			if cb.onRunEvent != nil {
-				cb.onRunEvent("tool_execution_finished", map[string]any{"tool": toolName, "call_id": call.ID, "success": result.Success, "error": result.Error})
-			}
-			run.Status = RunStatusRunning
+		i := 0
+		for i < len(resp.ToolCalls) {
+			startIdx := i
+			currentIsParallelSafe := isParallelSafeTool(getToolNameFromCall(resp.ToolCalls[i], nameMap))
 
-			if (toolName == "conversation.echo" || toolName == "conversation.ask") && result.Success {
-				if text, ok := result.Data["text"].(string); ok && strings.TrimSpace(text) != "" {
-					_, _ = rt.appendMessage(ctx, sessionID, "assistant", text, nil)
-					plan.Status = sdk.PlanStatusDone
-					rt.updateLastTaskNote(sessionID, &plan, results)
-					_ = rt.audit.Record(planReq, plan, results)
-					_ = rt.persistSession(ctx, sessionID)
-					finishRun(run, RunStatusCompleted, text, nil)
+			groupSize := 1
+			if currentIsParallelSafe {
+				for i+groupSize < len(resp.ToolCalls) && isParallelSafeTool(getToolNameFromCall(resp.ToolCalls[i+groupSize], nameMap)) {
+					groupSize++
+				}
+			}
+
+			if groupSize >= 2 && cb.onRunEvent != nil {
+				toolNames := make([]string, groupSize)
+				for j := 0; j < groupSize; j++ {
+					toolNames[j] = getToolNameFromCall(resp.ToolCalls[i+j], nameMap)
+				}
+				cb.onRunEvent("parallel_tool_group_started", map[string]any{"tools": toolNames, "count": groupSize})
+			}
+
+			if groupSize >= 2 {
+				toolNamesForTodo := make([]string, groupSize)
+				for j := 0; j < groupSize; j++ {
+					toolNamesForTodo[j] = getToolNameFromCall(resp.ToolCalls[startIdx+j], nameMap)
+				}
+				todoStartIdx := currentTodoIndex(run.Todos)
+				markParallelTodosInProgress(rt, run, todoStartIdx, groupSize, toolNamesForTodo, cb.emit)
+
+				parallelResults := rt.executeParallelTools(ctx, sessionID, run, resp.ToolCalls[startIdx:startIdx+groupSize], nameMap, actionRepeats, cb)
+
+				hasErrors := false
+				errorMessages := []string{}
+
+				for j, res := range parallelResults {
+					toolName := getToolNameFromCall(resp.ToolCalls[startIdx+j], nameMap)
+					run.LastStep = fmt.Sprintf("tool:%s", toolName)
+
+					if route == routeFreshInfo && toolName == "web.fetch" {
+						freshInfoFetches++
+						if res.Success {
+							freshInfoSuccessfulFetches++
+						}
+					}
+
+					if !res.Success && res.Error != "" {
+						hasErrors = true
+						errorMessages = append(errorMessages, fmt.Sprintf("%s: %s", toolName, res.Error))
+					}
+
+					planStep := sdk.PlanStep{ID: res.StepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: resp.ToolCalls[startIdx+j].Arguments, Status: sdk.StepStatusRunning}
+					if res.Success {
+						planStep.Status = sdk.StepStatusSucceeded
+					} else {
+						planStep.Status = sdk.StepStatusFailed
+					}
+
+					results = append(results, res)
+					run.Results = results
+					plan.Steps = append(plan.Steps, planStep)
+
+					if cb.onToolResult != nil {
+						cb.onToolResult(toolName, resp.ToolCalls[startIdx+j].ID, planStep, res)
+					}
+					if cb.onRunEvent != nil {
+						cb.onRunEvent("tool_execution_finished", map[string]any{"tool": toolName, "call_id": resp.ToolCalls[startIdx+j].ID, "success": res.Success, "error": res.Error})
+					}
+
+					partStatus := "completed"
+					if !res.Success || res.Error != "" {
+						partStatus = "error"
+					}
+					toolPart := sdk.MessagePart{Type: "tool", Tool: toolName, CallID: resp.ToolCalls[startIdx+j].ID, Input: resp.ToolCalls[startIdx+j].Arguments, Output: res.Data, Error: res.Error, Status: partStatus}
+					_, _ = rt.appendMessage(ctx, sessionID, "assistant", fmt.Sprintf("Tool call: %s", toolName), []sdk.MessagePart{toolPart})
+
+					baseMessages = append(baseMessages, map[string]any{"role": "tool", "name": resp.ToolCalls[startIdx+j].Name, "tool_call_id": resp.ToolCalls[startIdx+j].ID, "content": formatToolResultContent(res)})
+					run.Messages = cloneMessages(baseMessages)
+
+					rt.addEpisodicMemory(sessionID, fmt.Sprintf("Tool: %s, Success: %v, Summary: %s", toolName, res.Success, truncateLines(formatToolResultContent(res), 100)), []string{toolName})
+				}
+
+				resultBools := make([]bool, len(parallelResults))
+				for j, res := range parallelResults {
+					resultBools[j] = res.Success
+				}
+				completedGroup := ""
+				if todoStartIdx >= 0 && todoStartIdx < len(run.Todos) {
+					completedGroup = run.Todos[todoStartIdx].ParallelGroup
+				}
+				advanceTodosAfterParallelGroup(rt, run, todoStartIdx, groupSize, resultBools, completedGroup, cb.emit)
+
+				if hasErrors && route == routeFreshInfo {
+					for j, res := range parallelResults {
+						toolName := getToolNameFromCall(resp.ToolCalls[startIdx+j], nameMap)
+						if !res.Success && res.Error != "" && toolName == "web.fetch" && !freshInfoRetried {
+							recoveryPrompt := fmt.Sprintf("The previous web.fetch call failed with error: %s. This is a fresh-information request. Try a different public source with web.fetch now, then answer briefly.", res.Error)
+							baseMessages = append(baseMessages, map[string]any{"role": "system", "content": recoveryPrompt})
+							freshInfoRetried = true
+							break
+						}
+					}
+				}
+
+				rt.checkAndCompress(ctx, sessionID)
+				i += groupSize
+			} else {
+				call := resp.ToolCalls[i]
+				toolName := getToolNameFromCall(call, nameMap)
+				fingerprint := actionFingerprint(toolName, call.Arguments)
+				actionRepeats[fingerprint]++
+				if actionRepeats[fingerprint] > 2 {
+					loopErr := fmt.Errorf("detected repeated tool call for %s; stopping to avoid a loop", toolName)
+					finishRun(run, RunStatusFailed, "Stopped to avoid repeating the same failing step.", loopErr)
 					run.Plan = plan
 					run.Results = results
-					rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": text})
-					return Response{Plan: plan, Results: results, Reply: text}, nil
+					rt.finalizeRun(run, cb.emit, "run_loop_detected", map[string]any{"tool": toolName, "reply": run.Reply, "error": loopErr.Error()})
+					return Response{Plan: plan, Results: results, Reply: run.Reply}, loopErr
 				}
-				if toolName == "conversation.ask" {
-					questionText := formatAskQuestion(result.Data)
-					if strings.TrimSpace(questionText) != "" {
-						_, _ = rt.appendMessage(ctx, sessionID, "assistant", questionText, nil)
+				run.LastStep = fmt.Sprintf("tool:%s", toolName)
+				run.Status = RunStatusWaitingTool
+				if cb.onToolPending != nil {
+					cb.onToolPending(toolName, call)
+				}
+				if cb.onRunEvent != nil {
+					cb.onRunEvent("tool_execution_started", map[string]any{"tool": toolName, "call_id": call.ID, "timeout_ms": run.ToolTimeout.Milliseconds()})
+				}
+				markTodoInProgress(rt, run, toolName, cb.emit)
+				stepID := uuid.NewString()
+				planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: call.Arguments, Status: sdk.StepStatusRunning}
+				toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)
+				result, execErr := rt.orchestrator.ExecuteStep(toolCtx, sessionID, planStep)
+				toolCancel()
+				rt.maybeCreateCheckpoint(ctx, sessionID, toolName, call.Arguments)
+				result.StepID = stepID
+				if execErr != nil {
+					if confirmErr, ok := exec.IsConfirmationRequired(execErr); ok {
+						pending := pendingConfirmation{Tool: confirmErr.Tool, Inputs: confirmErr.Inputs, Decision: confirmErr.Decision}
+						rt.setPendingConfirmation(sessionID, pending)
+						question := formatConfirmationPrompt(pending)
+						_, _ = rt.appendMessage(ctx, sessionID, "assistant", question, nil)
+						plan.Status = sdk.PlanStatusDone
+						_ = rt.audit.Record(planReq, plan, results)
+						_ = rt.persistSession(ctx, sessionID)
+						payload := confirmationPayload(pending)
+						finishRun(run, RunStatusWaitingUser, question, nil)
+						run.Plan = plan
+						run.Results = results
+						run.Confirmation = payload
+						rt.finalizeRun(run, cb.emit, "run_waiting_user", map[string]any{"reply": question, "confirmation": payload})
+						return Response{Plan: plan, Results: results, Reply: question, Confirmation: payload}, nil
+					}
+					result.Success = false
+					result.Error = execErr.Error()
+				}
+				result.Data = rt.truncateToolResult(ctx, sessionID, planStep.Tool, result.Data)
+				if route == routeFreshInfo && toolName == "web.fetch" {
+					freshInfoFetches++
+					if result.Success {
+						freshInfoSuccessfulFetches++
+					}
+				}
+				results = append(results, result)
+				run.Results = results
+				if result.Success {
+					planStep.Status = sdk.StepStatusSucceeded
+				} else {
+					planStep.Status = sdk.StepStatusFailed
+				}
+				advanceTodosFromTool(rt, run, toolName, result.Success, cb.emit)
+				plan.Steps = append(plan.Steps, planStep)
+				if cb.onToolResult != nil {
+					cb.onToolResult(toolName, call.ID, planStep, result)
+				}
+				if cb.onRunEvent != nil {
+					cb.onRunEvent("tool_execution_finished", map[string]any{"tool": toolName, "call_id": call.ID, "success": result.Success, "error": result.Error})
+				}
+				run.Status = RunStatusRunning
+
+				if (toolName == "conversation.echo" || toolName == "conversation.ask") && result.Success {
+					if text, ok := result.Data["text"].(string); ok && strings.TrimSpace(text) != "" {
+						_, _ = rt.appendMessage(ctx, sessionID, "assistant", text, nil)
 						plan.Status = sdk.PlanStatusDone
 						rt.updateLastTaskNote(sessionID, &plan, results)
 						_ = rt.audit.Record(planReq, plan, results)
 						_ = rt.persistSession(ctx, sessionID)
-						finishRun(run, RunStatusCompleted, questionText, nil)
+						finishRun(run, RunStatusCompleted, text, nil)
 						run.Plan = plan
 						run.Results = results
-						rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": questionText})
-						return Response{Plan: plan, Results: results, Reply: questionText}, nil
+						rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": text})
+						return Response{Plan: plan, Results: results, Reply: text}, nil
+					}
+					if toolName == "conversation.ask" {
+						questionText := formatAskQuestion(result.Data)
+						if strings.TrimSpace(questionText) != "" {
+							_, _ = rt.appendMessage(ctx, sessionID, "assistant", questionText, nil)
+							plan.Status = sdk.PlanStatusDone
+							rt.updateLastTaskNote(sessionID, &plan, results)
+							_ = rt.audit.Record(planReq, plan, results)
+							_ = rt.persistSession(ctx, sessionID)
+							finishRun(run, RunStatusCompleted, questionText, nil)
+							run.Plan = plan
+							run.Results = results
+							rt.finalizeRun(run, cb.emit, "run_completed", map[string]any{"reply": questionText})
+							return Response{Plan: plan, Results: results, Reply: questionText}, nil
+						}
 					}
 				}
-			}
 
-			partStatus := "completed"
-			if !result.Success || result.Error != "" {
-				partStatus = "error"
-			}
-			toolPart := sdk.MessagePart{Type: "tool", Tool: toolName, CallID: call.ID, Input: call.Arguments, Output: result.Data, Error: result.Error, Status: partStatus}
-			_, _ = rt.appendMessage(ctx, sessionID, "assistant", fmt.Sprintf("Tool call: %s", toolName), []sdk.MessagePart{toolPart})
-
-			baseMessages = append(baseMessages, map[string]any{"role": "tool", "name": call.Name, "tool_call_id": call.ID, "content": formatToolResultContent(result)})
-			run.Messages = cloneMessages(baseMessages)
-
-			rt.addEpisodicMemory(sessionID, fmt.Sprintf("Tool: %s, Success: %v, Summary: %s", toolName, result.Success, truncateLines(formatToolResultContent(result), 100)), []string{toolName})
-			if rt.memorySystem(sessionID).ShouldExtract() {
-				extracted := rt.memorySystem(sessionID).ExtractSemanticFromEpisodic(ctx)
-				if extracted > 0 {
-					rt.logger.Debug("extracted semantic memories", zap.Int("count", extracted))
+				partStatus := "completed"
+				if !result.Success || result.Error != "" {
+					partStatus = "error"
 				}
-			}
+				toolPart := sdk.MessagePart{Type: "tool", Tool: toolName, CallID: call.ID, Input: call.Arguments, Output: result.Data, Error: result.Error, Status: partStatus}
+				_, _ = rt.appendMessage(ctx, sessionID, "assistant", fmt.Sprintf("Tool call: %s", toolName), []sdk.MessagePart{toolPart})
 
-			if !result.Success && result.Error != "" {
-				recoveryPrompt := fmt.Sprintf("The previous tool call '%s' failed with error: %s. Please analyze the error and try an alternative approach.", toolName, result.Error)
-				if route == routeFreshInfo && toolName == "web.fetch" && !freshInfoRetried {
-					recoveryPrompt = fmt.Sprintf("The previous web.fetch call failed with error: %s. This is a fresh-information request. Try a different public source with web.fetch now, then answer briefly.", result.Error)
-					freshInfoRetried = true
-				}
-				baseMessages = append(baseMessages, map[string]any{"role": "system", "content": recoveryPrompt})
-			} else if route == routeFreshInfo && toolName == "web.fetch" && result.Success {
-				switch {
-				case freshInfoSuccessfulFetches >= 2:
-					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You now have enough fresh evidence from multiple successful web.fetch calls. Stop fetching and answer the user's question directly in one concise reply, citing the fetched source names or URLs briefly."})
-				case freshInfoFetches >= 3:
-					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You already have a successful web.fetch result and have tried several sources. Stop browsing and answer directly using the best fetched evidence you have."})
-				}
-			}
+				baseMessages = append(baseMessages, map[string]any{"role": "tool", "name": call.Name, "tool_call_id": call.ID, "content": formatToolResultContent(result)})
+				run.Messages = cloneMessages(baseMessages)
 
-			if reflectionEnabled {
-				reflection.recordResult(result.Success)
-				if reflection.shouldReflect() && step < maxAgentSteps-1 {
-					memReflection := rt.memorySystem(sessionID).Reflect(ctx, results, normalized.Text)
-					if !memReflection.Success {
-						reflection.addSuggestion(memReflection.Feedback)
-					}
-					if memReflection.LoopDetected {
-						reflection.addSuggestion("Loop detected: consider alternative strategy")
-					}
-					for _, sugg := range memReflection.Suggestions {
-						reflection.addSuggestion(sugg)
-					}
-					reflectionPrompt := rt.buildReflectionPrompt(results, normalized.Text)
-					if reflectionPrompt != "" {
-						baseMessages = append(baseMessages, map[string]any{"role": "system", "content": reflectionPrompt})
-						reflection.consecutiveSuccesses = 0
-						reflection.consecutiveFailures = 0
+				rt.addEpisodicMemory(sessionID, fmt.Sprintf("Tool: %s, Success: %v, Summary: %s", toolName, result.Success, truncateLines(formatToolResultContent(result), 100)), []string{toolName})
+				if rt.memorySystem(sessionID).ShouldExtract() {
+					extracted := rt.memorySystem(sessionID).ExtractSemanticFromEpisodic(ctx)
+					if extracted > 0 {
+						rt.logger.Debug("extracted semantic memories", zap.Int("count", extracted))
 					}
 				}
-			}
 
-			rt.checkAndCompress(ctx, sessionID)
+				if !result.Success && result.Error != "" {
+					recoveryPrompt := fmt.Sprintf("The previous tool call '%s' failed with error: %s. Please analyze the error and try an alternative approach.", toolName, result.Error)
+					if route == routeFreshInfo && toolName == "web.fetch" && !freshInfoRetried {
+						recoveryPrompt = fmt.Sprintf("The previous web.fetch call failed with error: %s. This is a fresh-information request. Try a different public source with web.fetch now, then answer briefly.", result.Error)
+						freshInfoRetried = true
+					}
+					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": recoveryPrompt})
+				} else if route == routeFreshInfo && toolName == "web.fetch" && result.Success {
+					switch {
+					case freshInfoSuccessfulFetches >= 2:
+						baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You now have enough fresh evidence from multiple successful web.fetch calls. Stop fetching and answer the user's question directly in one concise reply, citing the fetched source names or URLs briefly."})
+					case freshInfoFetches >= 3:
+						baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You already have a successful web.fetch result and have tried several sources. Stop browsing and answer directly using the best fetched evidence you have."})
+					}
+				}
+
+				if reflectionEnabled {
+					reflection.recordResult(result.Success)
+					if reflection.shouldReflect() && step < rt.effectiveMaxAgentSteps()-1 {
+						memReflection := rt.memorySystem(sessionID).Reflect(ctx, results, normalized.Text)
+						if !memReflection.Success {
+							reflection.addSuggestion(memReflection.Feedback)
+						}
+						if memReflection.LoopDetected {
+							reflection.addSuggestion("Loop detected: consider alternative strategy")
+						}
+						for _, sugg := range memReflection.Suggestions {
+							reflection.addSuggestion(sugg)
+						}
+						reflectionPrompt := rt.buildReflectionPrompt(results, normalized.Text)
+						if reflectionPrompt != "" {
+							baseMessages = append(baseMessages, map[string]any{"role": "system", "content": reflectionPrompt})
+							reflection.consecutiveSuccesses = 0
+							reflection.consecutiveFailures = 0
+						}
+					}
+				}
+
+				rt.checkAndCompress(ctx, sessionID)
+				i++
+			}
 		}
 	}
 
@@ -487,6 +630,89 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	run.Results = results
 	rt.finalizeRun(run, cb.emit, "run_failed", map[string]any{"error": err.Error()})
 	return Response{Plan: plan, Results: results, Reply: ""}, err
+}
+
+func getToolNameFromCall(call toolCall, nameMap map[string]string) string {
+	toolName := nameMap[call.Name]
+	if toolName == "" {
+		toolName = call.Name
+	}
+	return toolName
+}
+
+func (rt *Runtime) executeParallelTools(ctx context.Context, sessionID string, run *RunState, calls []toolCall, nameMap map[string]string, actionRepeats map[string]int, cb runnerCallbacks) []sdk.ToolResult {
+	if len(calls) < 2 {
+		if len(calls) == 1 {
+			stepID := uuid.NewString()
+			toolName := getToolNameFromCall(calls[0], nameMap)
+			planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: calls[0].Arguments, Status: sdk.StepStatusRunning}
+			toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)
+			result, execErr := rt.orchestrator.ExecuteStep(toolCtx, sessionID, planStep)
+			toolCancel()
+			rt.maybeCreateCheckpoint(ctx, sessionID, toolName, calls[0].Arguments)
+			result.StepID = stepID
+			if execErr != nil {
+				result.Success = false
+				result.Error = execErr.Error()
+			}
+			result.Data = rt.truncateToolResult(ctx, sessionID, planStep.Tool, result.Data)
+			if result.Success {
+				planStep.Status = sdk.StepStatusSucceeded
+			} else {
+				planStep.Status = sdk.StepStatusFailed
+			}
+			return []sdk.ToolResult{result}
+		}
+		return nil
+	}
+
+	toolCtx, toolCancel := context.WithTimeout(ctx, run.ToolTimeout)
+	defer toolCancel()
+
+	type taskInfo struct {
+		idx      int
+		toolName string
+		stepID   string
+		planStep sdk.PlanStep
+	}
+
+	tasks := make([]taskInfo, len(calls))
+	inputs := make([]exec.ToolCallInput, len(calls))
+	for idx, call := range calls {
+		toolName := getToolNameFromCall(call, nameMap)
+		stepID := uuid.NewString()
+		planStep := sdk.PlanStep{ID: stepID, Description: fmt.Sprintf("Tool call: %s", toolName), Tool: toolName, Inputs: call.Arguments, Status: sdk.StepStatusRunning}
+		tasks[idx] = taskInfo{idx: idx, toolName: toolName, stepID: stepID, planStep: planStep}
+		inputs[idx] = exec.ToolCallInput{
+			ID:        stepID,
+			Name:      toolName,
+			Arguments: call.Arguments,
+		}
+	}
+
+	results := exec.DefaultWorkerPool.ExecuteToolCalls(toolCtx, inputs, func(pctx context.Context, input exec.ToolCallInput) sdk.ToolResult {
+		for _, task := range tasks {
+			if task.stepID == input.ID {
+				result, execErr := rt.orchestrator.ExecuteStep(pctx, sessionID, task.planStep)
+				rt.maybeCreateCheckpoint(pctx, sessionID, task.toolName, input.Arguments)
+				result.StepID = task.stepID
+				if execErr != nil {
+					result.Success = false
+					result.Error = execErr.Error()
+				}
+				result.Data = rt.truncateToolResult(pctx, sessionID, task.planStep.Tool, result.Data)
+				if !result.Success {
+					task.planStep.Status = sdk.StepStatusFailed
+				} else {
+					task.planStep.Status = sdk.StepStatusSucceeded
+				}
+				return result
+			}
+		}
+		return sdk.ToolResult{Success: false, Error: "task not found"}
+	})
+
+	return results
 }
 
 func actionFingerprint(toolName string, args map[string]any) string {

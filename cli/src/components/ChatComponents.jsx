@@ -72,8 +72,8 @@ export function ChatEntries(props) {
                 error: theme.error,
                 thinking: theme.thinking,
             })}>
-                  {(line) => (<text fg={line.fg ?? theme.text} attributes={line.attributes}>
-                      {line.text}
+                  {(line) => (<text fg={line.content ? undefined : (line.fg ?? theme.text)} attributes={line.attributes} content={line.content}>
+                      {line.content ? undefined : line.text}
                     </text>)}
                 </For>
               </box>

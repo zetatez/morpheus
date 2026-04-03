@@ -125,6 +125,8 @@ const (
 	AgentModePlan  AgentMode = "plan"
 )
 
+const defaultMaxAgentSteps = 20
+
 // Response wraps plan execution output for callers.
 type Response struct {
 	RunID        string               `json:"run_id,omitempty"`
@@ -1031,6 +1033,13 @@ func normalizeAgentMode(mode AgentMode) AgentMode {
 
 func (rt *Runtime) defaultAgentMode() AgentMode {
 	return normalizeAgentMode(AgentMode(rt.cfg.Agent.DefaultMode))
+}
+
+func (rt *Runtime) effectiveMaxAgentSteps() int {
+	if rt.cfg.Agent.MaxAgentSteps <= 0 {
+		return defaultMaxAgentSteps
+	}
+	return rt.cfg.Agent.MaxAgentSteps
 }
 
 func (rt *Runtime) sessionMemoryState(sessionID string) *sessionMemoryState {

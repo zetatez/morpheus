@@ -20,11 +20,12 @@ type todoPlan struct {
 }
 
 type todoPlanItem struct {
-	ID       string `json:"id"`
-	Content  string `json:"content"`
-	Status   string `json:"status,omitempty"`
-	Priority string `json:"priority,omitempty"`
-	Active   bool   `json:"active,omitempty"`
+	ID            string `json:"id"`
+	Content       string `json:"content"`
+	Status        string `json:"status,omitempty"`
+	Priority      string `json:"priority,omitempty"`
+	Active        bool   `json:"active,omitempty"`
+	ParallelGroup string `json:"parallel_group,omitempty"`
 }
 
 func (rt *Runtime) planTodosFromInput(ctx context.Context, sessionID, input string) []RunTodo {
@@ -117,11 +118,12 @@ func normalizeTodoPlan(plan todoPlan) []RunTodo {
 		status := normalizeTodoStatus(item.Status)
 		priority := normalizeTodoPriority(item.Priority)
 		out = append(out, RunTodo{
-			ID:       id,
-			Content:  content,
-			Status:   status,
-			Priority: priority,
-			Active:   status == "in_progress" || item.Active,
+			ID:            id,
+			Content:       content,
+			Status:        status,
+			Priority:      priority,
+			Active:        status == "in_progress" || item.Active,
+			ParallelGroup: strings.TrimSpace(item.ParallelGroup),
 		})
 	}
 	ensureSingleActiveTodo(out)
@@ -211,10 +213,38 @@ func renderTodoSystemPrompt(todos []RunTodo) string {
 		} else if todo.Status == "failed" {
 			marker = "[!]"
 		}
-		b.WriteString(fmt.Sprintf("- %s %s\n", marker, todo.Content))
+		groupHint := ""
+		if todo.ParallelGroup != "" {
+			groupHint = fmt.Sprintf(" [group:%s]", todo.ParallelGroup)
+		}
+		b.WriteString(fmt.Sprintf("- %s %s%s\n", marker, todo.Content, groupHint))
 	}
+
+	parallelGroups := detectParallelGroups(todos)
+	if len(parallelGroups) > 0 {
+		b.WriteString("\nParallel execution hint: ")
+		for group, members := range parallelGroups {
+			b.WriteString(fmt.Sprintf("Items %s share parallel_group '%s' and can run concurrently. ", strings.Join(members, ", "), group))
+		}
+	}
+
 	b.WriteString("\nBefore major work, acknowledge the todo structure briefly. When you choose a tool, make sure it advances the active todo.")
 	return b.String()
+}
+
+func detectParallelGroups(todos []RunTodo) map[string][]string {
+	groups := make(map[string][]string)
+	for _, todo := range todos {
+		if todo.ParallelGroup != "" && todo.Status != "completed" && todo.Status != "failed" {
+			groups[todo.ParallelGroup] = append(groups[todo.ParallelGroup], todo.ID)
+		}
+	}
+	for group, members := range groups {
+		if len(members) < 2 {
+			delete(groups, group)
+		}
+	}
+	return groups
 }
 
 func ensureSingleActiveTodo(todos []RunTodo) {
@@ -279,13 +309,17 @@ func advanceTodosFromTool(rt *Runtime, run *RunState, toolName string, success b
 	}
 	next[idx].Tool = toolName
 	if success {
+		completedGroup := next[idx].ParallelGroup
 		next[idx].Status = "completed"
 		next[idx].Active = false
 		next[idx].Note = "Step finished successfully"
-		if idx+1 < len(next) && next[idx+1].Status == "pending" {
-			next[idx+1].Status = "in_progress"
-			next[idx+1].Active = true
-			next[idx+1].Note = "Ready for the next step"
+
+		nextIdx := idx + 1
+		if nextIdx < len(next) && next[nextIdx].Status == "pending" {
+			next[nextIdx].Status = "in_progress"
+			next[nextIdx].Active = true
+			next[nextIdx].Note = "Ready for the next step"
+			activateParallelGroup(next, nextIdx, completedGroup)
 		}
 	} else {
 		next[idx].Status = "failed"
@@ -293,6 +327,19 @@ func advanceTodosFromTool(rt *Runtime, run *RunState, toolName string, success b
 		next[idx].Note = "Last tool failed; retry or update the plan"
 	}
 	rt.updateRunTodos(run, next, emit)
+}
+
+func activateParallelGroup(todos []RunTodo, startIdx int, group string) {
+	if group == "" || startIdx >= len(todos) {
+		return
+	}
+	for i := startIdx + 1; i < len(todos); i++ {
+		if todos[i].ParallelGroup == group && todos[i].Status == "pending" {
+			todos[i].Status = "in_progress"
+			todos[i].Active = true
+			todos[i].Note = "Ready for parallel execution with group " + group
+		}
+	}
 }
 
 func markTodoInProgress(rt *Runtime, run *RunState, toolName string, emit replEmitter) {
@@ -314,6 +361,57 @@ func markTodoInProgress(rt *Runtime, run *RunState, toolName string, emit replEm
 	next[idx].Active = true
 	next[idx].Tool = toolName
 	next[idx].Note = "Running current step"
+	rt.updateRunTodos(run, next, emit)
+}
+
+func markParallelTodosInProgress(rt *Runtime, run *RunState, startIdx int, count int, toolNames []string, emit replEmitter) {
+	if rt == nil || run == nil || len(run.Todos) == 0 || startIdx < 0 || count <= 0 {
+		return
+	}
+	next := append([]RunTodo(nil), run.Todos...)
+	for i := 0; i < count && startIdx+i < len(next); i++ {
+		if next[startIdx+i].Status == "pending" || next[startIdx+i].Status == "in_progress" {
+			next[startIdx+i].Status = "in_progress"
+			next[startIdx+i].Active = true
+			if i < len(toolNames) {
+				next[startIdx+i].Tool = toolNames[i]
+			}
+			next[startIdx+i].Note = "Running in parallel"
+		}
+	}
+	rt.updateRunTodos(run, next, emit)
+}
+
+func advanceTodosAfterParallelGroup(rt *Runtime, run *RunState, startIdx int, count int, results []bool, completedGroup string, emit replEmitter) {
+	if rt == nil || run == nil || len(run.Todos) == 0 || startIdx < 0 || count <= 0 {
+		return
+	}
+	next := append([]RunTodo(nil), run.Todos...)
+
+	allSucceeded := true
+	for i := 0; i < count && startIdx+i < len(next); i++ {
+		if results[i] {
+			next[startIdx+i].Status = "completed"
+			next[startIdx+i].Active = false
+			next[startIdx+i].Note = "Parallel step finished successfully"
+		} else {
+			next[startIdx+i].Status = "failed"
+			next[startIdx+i].Active = true
+			next[startIdx+i].Note = "Parallel step failed"
+			allSucceeded = false
+		}
+	}
+
+	if allSucceeded {
+		nextIdx := startIdx + count
+		if nextIdx < len(next) && next[nextIdx].Status == "pending" {
+			next[nextIdx].Status = "in_progress"
+			next[nextIdx].Active = true
+			next[nextIdx].Note = "Ready for the next step"
+			activateParallelGroup(next, nextIdx, completedGroup)
+		}
+	}
+
 	rt.updateRunTodos(run, next, emit)
 }
 
@@ -358,7 +456,7 @@ const todoPlannerSystemPrompt = `You are a task planner for a coding agent.
 Return JSON only with this schema:
 {
   "todos": [
-    {"id": "todo-1", "content": "...", "status": "in_progress|pending", "priority": "high|medium|low", "active": true|false}
+    {"id": "todo-1", "content": "...", "status": "in_progress|pending", "priority": "high|medium|low", "active": true|false, "parallel_group": "group-a"}
   ]
 }
 
@@ -369,6 +467,9 @@ Rules:
 - Use pending for the rest.
 - Keep content short and specific.
 - Focus on investigation, implementation, verification, and follow-up as needed.
+- Mark independent tasks that can run in parallel with the same parallel_group value.
+- Tasks in the same parallel_group can execute concurrently (e.g., parallel_group: "group-a" for multiple investigation tasks).
+- Tasks with no parallel_group or different groups must run sequentially.
 - Return valid JSON only.`
 
 func (rt *Runtime) ReplaceTodos(sessionID string, todos []todotool.Todo) ([]todotool.Todo, error) {

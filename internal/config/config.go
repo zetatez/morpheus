@@ -95,6 +95,7 @@ type AgentConfig struct {
 	DefaultMode        string            `mapstructure:"default_mode"`
 	Agents             []AgentDefinition `mapstructure:"agents"`
 	MaxConcurrentTasks int               `mapstructure:"max_concurrent_tasks"`
+	MaxAgentSteps      int               `mapstructure:"max_agent_steps"`
 }
 
 type AgentDefinition struct {

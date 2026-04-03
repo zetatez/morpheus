@@ -103,6 +103,7 @@ export function App(props: AppProps) {
   const [runsNextCursor, setRunsNextCursor] = createSignal<string | null>(null)
   const [runsStatusFilter, setRunsStatusFilter] = createSignal("")
   const [activeRunBanner, setActiveRunBanner] = createSignal<string | null>(null)
+  const [activeParallelTools, setActiveParallelTools] = createSignal<string[]>([])
   const [activeTodos, setActiveTodos] = createSignal<TodoItem[]>([])
   const [activeStreamToken, setActiveStreamToken] = createSignal<string | null>(null)
   const [runTimeline, setRunTimeline] = createSignal<string | null>(null)
@@ -608,15 +609,43 @@ export function App(props: AppProps) {
         }
         if (runType === "tool_execution_started") {
           const tool = String((evt.data.data ?? {})["tool"] ?? "tool")
-          setActiveRunBanner(`Executing ${tool}...`)
+          setActiveParallelTools(prev => [...prev.filter(t => t !== tool), tool])
+          const tools = activeParallelTools()
+          if (tools.length > 1) {
+            setActiveRunBanner(`Executing ${tools.length} tools in parallel...`)
+          } else {
+            setActiveRunBanner(`Executing ${tool}...`)
+          }
           return
         }
         if (runType === "tool_execution_finished") {
           const data = (evt.data.data ?? {}) as Record<string, unknown>
           const tool = String(data["tool"] ?? "tool")
           const success = Boolean(data["success"])
-          setActiveRunBanner(success ? `Finished ${tool}` : `${tool} failed`)
+          setActiveParallelTools(prev => prev.filter(t => t !== tool))
+          const remaining = activeParallelTools()
+          if (remaining.length > 0) {
+            setActiveRunBanner(`Executing ${remaining.length} tools in parallel...`)
+          } else {
+            setActiveRunBanner(success ? `Finished ${tool}` : `${tool} failed`)
+          }
           appendLoopNote(`tool-finish:${evt.data.seq}`, "Thinking: tool finished, continuing with the next step.")
+          return
+        }
+        if (runType === "parallel_tool_group_started") {
+          const data = (evt.data.data ?? {}) as Record<string, unknown>
+          const tools = Array.isArray(data["tools"]) ? (data["tools"] as string[]) : []
+          const count = Number(data["count"] ?? tools.length)
+          if (tools.length > 0) {
+            setActiveParallelTools(tools)
+            if (tools.length > 2) {
+              setActiveRunBanner(`Executing ${tools.slice(0, 2).join(", ")} +${tools.length - 2} more in parallel...`)
+            } else {
+              setActiveRunBanner(`Executing ${tools.join(", ")} in parallel...`)
+            }
+          } else if (count > 0) {
+            setActiveRunBanner(`Executing ${count} tools in parallel...`)
+          }
           return
         }
         if (runType === "run_started") {

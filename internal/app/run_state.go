@@ -69,13 +69,14 @@ type RunState struct {
 }
 
 type RunTodo struct {
-	ID       string `json:"id"`
-	Content  string `json:"content"`
-	Status   string `json:"status"`
-	Priority string `json:"priority,omitempty"`
-	Active   bool   `json:"active,omitempty"`
-	Tool     string `json:"tool,omitempty"`
-	Note     string `json:"note,omitempty"`
+	ID            string `json:"id"`
+	Content       string `json:"content"`
+	Status        string `json:"status"`
+	Priority      string `json:"priority,omitempty"`
+	Active        bool   `json:"active,omitempty"`
+	Tool          string `json:"tool,omitempty"`
+	Note          string `json:"note,omitempty"`
+	ParallelGroup string `json:"parallel_group,omitempty"`
 }
 
 type runStore struct {

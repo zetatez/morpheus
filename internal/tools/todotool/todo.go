@@ -9,13 +9,14 @@ import (
 )
 
 type Todo struct {
-	ID       string
-	Content  string
-	Status   string
-	Priority string
-	Active   bool
-	Tool     string
-	Note     string
+	ID            string
+	Content       string
+	Status        string
+	Priority      string
+	Active        bool
+	Tool          string
+	Note          string
+	ParallelGroup string
 }
 
 type Store interface {
@@ -45,12 +46,13 @@ func (t *Tool) Schema() map[string]any {
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"id":       map[string]any{"type": "string"},
-						"content":  map[string]any{"type": "string"},
-						"status":   map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed", "failed", "cancelled"}},
-						"priority": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
-						"active":   map[string]any{"type": "boolean"},
-						"note":     map[string]any{"type": "string"},
+						"id":             map[string]any{"type": "string"},
+						"content":        map[string]any{"type": "string"},
+						"status":         map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed", "failed", "cancelled"}},
+						"priority":       map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+						"active":         map[string]any{"type": "boolean"},
+						"note":           map[string]any{"type": "string"},
+						"parallel_group": map[string]any{"type": "string"},
 					},
 					"required": []string{"content", "status", "priority"},
 				},
@@ -92,7 +94,8 @@ func (t *Tool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolResult
 		priority, _ := item["priority"].(string)
 		active, _ := item["active"].(bool)
 		note, _ := item["note"].(string)
-		todos = append(todos, Todo{ID: id, Content: content, Status: status, Priority: priority, Active: active, Note: note})
+		parallelGroup, _ := item["parallel_group"].(string)
+		todos = append(todos, Todo{ID: id, Content: content, Status: status, Priority: priority, Active: active, Note: note, ParallelGroup: parallelGroup})
 	}
 	updated, err := t.store.ReplaceTodos(sessionID, todos)
 	if err != nil {
@@ -100,7 +103,7 @@ func (t *Tool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolResult
 	}
 	out := make([]map[string]any, 0, len(updated))
 	for _, todo := range updated {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"id":       todo.ID,
 			"content":  todo.Content,
 			"status":   todo.Status,
@@ -108,7 +111,11 @@ func (t *Tool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolResult
 			"active":   todo.Active,
 			"tool":     todo.Tool,
 			"note":     todo.Note,
-		})
+		}
+		if todo.ParallelGroup != "" {
+			entry["parallel_group"] = todo.ParallelGroup
+		}
+		out = append(out, entry)
 	}
 	return sdk.ToolResult{Success: true, Data: map[string]any{"todos": out, "count": len(out)}}, nil
 }
