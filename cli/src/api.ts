@@ -193,18 +193,18 @@ export function createClient(baseUrl: string) {
       return normalizeResponse(raw)
     },
     async sessions(query?: string): Promise<SessionInfo[]> {
-      const url = new URL(`${base}/sessions`)
+      const url = new URL(`${base}/session/`)
       if (query) url.searchParams.set("q", query)
       const data = await fetchJSON(url.toString())
       return ((data as Record<string, unknown>).sessions ?? []) as SessionInfo[]
     },
     async loadSession(id: string): Promise<void> {
-      await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}/load`, {
+      await fetchJSON(`${base}/session/${encodeURIComponent(id)}/load`, {
         method: "POST",
       })
     },
     async getSession(id: string): Promise<SessionDump> {
-      const data = await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}`)
+      const data = await fetchJSON(`${base}/session/${encodeURIComponent(id)}`)
       const raw = data as Record<string, unknown>
       return {
         id: String(raw.id ?? id),
@@ -212,19 +212,19 @@ export function createClient(baseUrl: string) {
       }
     },
     async skills(query?: string): Promise<SkillListResponse> {
-      const url = new URL(`${base}/skills`)
+      const url = new URL(`${base}/skill`)
       if (query) url.searchParams.set("q", query)
       const data = await fetchJSON(url.toString())
       return data as SkillListResponse
     },
     async loadSkill(name: string): Promise<SkillMetadata> {
-      const data = await fetchJSON(`${base}/skills/${encodeURIComponent(name)}/load`, {
+      const data = await fetchJSON(`${base}/skill/${encodeURIComponent(name)}/load`, {
         method: "POST",
       })
       return data as SkillMetadata
     },
     async models(): Promise<ModelsResponse> {
-      const data = await fetchJSON(`${base}/models`)
+      const data = await fetchJSON(`${base}/models/`)
       return data as ModelsResponse
     },
     async selectModel(req: ModelSelectRequest): Promise<void> {

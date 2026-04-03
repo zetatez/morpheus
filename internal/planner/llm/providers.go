@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/zetatez/morpheus/pkg/sdk"
@@ -99,11 +100,31 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 
 	systemPrompt := p.GetSystemPrompt()
 
+	fmt.Fprintf(os.Stderr, "DEBUG Plan: model=%q isAnthropic=%v\n", p.model, isMiniMaxAnthropicModel(p.model))
+
+	if isMiniMaxAnthropicModel(p.model) {
+		return p.planAnthropic(ctx, systemPrompt, userPrompt)
+	}
+	return p.planOpenAI(ctx, systemPrompt, userPrompt)
+}
+
+func isMiniMaxAnthropicModel(model string) bool {
+	switch model {
+	case "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+		"MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2":
+		return true
+	}
+	return false
+}
+
+func (p *MiniMaxProvider) planAnthropic(ctx context.Context, systemPrompt, userPrompt string) (sdk.Plan, error) {
 	payload := map[string]any{
-		"model":              p.model,
-		"messages":           []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": userPrompt}},
-		"temperature":        p.temp,
-		"tokens_to_generate": 4096,
+		"model": p.model,
+		"messages": []map[string]any{
+			{"role": "user", "content": systemPrompt + "\n\n" + userPrompt},
+		},
+		"max_tokens":  2048,
+		"temperature": p.temp,
 	}
 
 	body, err := json.Marshal(payload)
@@ -111,7 +132,79 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 		return sdk.Plan{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/text/chatcompletion_v2", bytes.NewReader(body))
+	url := p.endpoint + "/anthropic/v1/messages"
+	fmt.Printf("DEBUG: URL=%s body=%s\n", url, string(body))
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return sdk.Plan{}, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return sdk.Plan{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return sdk.Plan{}, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return sdk.Plan{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var raw struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return sdk.Plan{}, err
+	}
+
+	if raw.Error.Type != "" {
+		return sdk.Plan{}, fmt.Errorf("minimax error: %s", raw.Error.Message)
+	}
+
+	if len(raw.Content) == 0 {
+		return sdk.Plan{}, fmt.Errorf("no response content")
+	}
+
+	var content string
+	for _, block := range raw.Content {
+		if block.Type == "text" {
+			content = block.Text
+			break
+		}
+	}
+	return p.parsePlanResponse(content)
+}
+
+func (p *MiniMaxProvider) planOpenAI(ctx context.Context, systemPrompt, userPrompt string) (sdk.Plan, error) {
+	payload := map[string]any{
+		"model":       p.model,
+		"messages":    []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": userPrompt}},
+		"temperature": p.temp,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return sdk.Plan{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/v1/text/chatcompletion_v2", bytes.NewReader(body))
 	if err != nil {
 		return sdk.Plan{}, err
 	}

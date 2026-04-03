@@ -39,19 +39,19 @@ export function createClient(baseUrl) {
             return normalizeResponse(raw);
         },
         async sessions(query) {
-            const url = new URL(`${base}/sessions`);
+            const url = new URL(`${base}/session/`);
             if (query)
                 url.searchParams.set("q", query);
             const data = await fetchJSON(url.toString());
             return (data.sessions ?? []);
         },
         async loadSession(id) {
-            await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}/load`, {
+            await fetchJSON(`${base}/session/${encodeURIComponent(id)}/load`, {
                 method: "POST",
             });
         },
         async getSession(id) {
-            const data = await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}`);
+            const data = await fetchJSON(`${base}/session/${encodeURIComponent(id)}`);
             const raw = data;
             return {
                 id: String(raw.id ?? id),
@@ -59,20 +59,20 @@ export function createClient(baseUrl) {
             };
         },
         async skills(query) {
-            const url = new URL(`${base}/skills`);
+            const url = new URL(`${base}/skill`);
             if (query)
                 url.searchParams.set("q", query);
             const data = await fetchJSON(url.toString());
             return data;
         },
         async loadSkill(name) {
-            const data = await fetchJSON(`${base}/skills/${encodeURIComponent(name)}/load`, {
+            const data = await fetchJSON(`${base}/skill/${encodeURIComponent(name)}/load`, {
                 method: "POST",
             });
             return data;
         },
         async models() {
-            const data = await fetchJSON(`${base}/models`);
+            const data = await fetchJSON(`${base}/models/`);
             return data;
         },
         async selectModel(req) {

@@ -2936,6 +2936,8 @@ func (s *APIServer) registerRoutes() {
 	s.mux.HandleFunc("/plan", s.wrapLimited("plan", s.handlePlan))
 	s.mux.HandleFunc("/execute", s.wrapLimited("execute", s.handleExecute))
 	s.mux.HandleFunc("/chat", s.wrapLimited("chat", s.handleChat))
+	s.mux.HandleFunc("/skill", s.handleSkillList)
+	s.mux.HandleFunc("/skill/{name}", s.handleSkillByName)
 	s.mux.HandleFunc("/models/", s.handleModels)
 	s.mux.HandleFunc("/models/select", s.handleModelSelect)
 	s.mux.HandleFunc("/runs/", s.handleRuns)
