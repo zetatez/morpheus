@@ -107,7 +107,7 @@ func runRepl(ctx context.Context, opts *Options, settings replSettings) error {
 }
 
 func detectExistingServer(ctx context.Context, apiURL string) (bool, string) {
-	healthURL := strings.TrimRight(apiURL, "/") + "/health"
+	healthURL := strings.TrimRight(apiURL, "/") + "/global/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 	if err != nil {
 		return false, ""
@@ -169,7 +169,7 @@ func runFrontend(ctx context.Context, settings replSettings, apiURL string) erro
 }
 
 func waitForServer(ctx context.Context, apiURL string) error {
-	healthURL := strings.TrimRight(apiURL, "/") + "/health"
+	healthURL := strings.TrimRight(apiURL, "/") + "/global/health"
 	deadline := time.After(10 * time.Second)
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()

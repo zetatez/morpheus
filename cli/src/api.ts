@@ -193,18 +193,18 @@ export function createClient(baseUrl: string) {
       return normalizeResponse(raw)
     },
     async sessions(query?: string): Promise<SessionInfo[]> {
-      const url = new URL(`${base}/api/v1/sessions`)
+      const url = new URL(`${base}/sessions`)
       if (query) url.searchParams.set("q", query)
       const data = await fetchJSON(url.toString())
       return ((data as Record<string, unknown>).sessions ?? []) as SessionInfo[]
     },
     async loadSession(id: string): Promise<void> {
-      await fetchJSON(`${base}/api/v1/sessions/${encodeURIComponent(id)}/load`, {
+      await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}/load`, {
         method: "POST",
       })
     },
     async getSession(id: string): Promise<SessionDump> {
-      const data = await fetchJSON(`${base}/api/v1/sessions/${encodeURIComponent(id)}`)
+      const data = await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}`)
       const raw = data as Record<string, unknown>
       return {
         id: String(raw.id ?? id),
@@ -212,58 +212,58 @@ export function createClient(baseUrl: string) {
       }
     },
     async skills(query?: string): Promise<SkillListResponse> {
-      const url = new URL(`${base}/api/v1/skills`)
+      const url = new URL(`${base}/skills`)
       if (query) url.searchParams.set("q", query)
       const data = await fetchJSON(url.toString())
       return data as SkillListResponse
     },
     async loadSkill(name: string): Promise<SkillMetadata> {
-      const data = await fetchJSON(`${base}/api/v1/skills/${encodeURIComponent(name)}/load`, {
+      const data = await fetchJSON(`${base}/skills/${encodeURIComponent(name)}/load`, {
         method: "POST",
       })
       return data as SkillMetadata
     },
     async models(): Promise<ModelsResponse> {
-      const data = await fetchJSON(`${base}/api/v1/models`)
+      const data = await fetchJSON(`${base}/models`)
       return data as ModelsResponse
     },
     async selectModel(req: ModelSelectRequest): Promise<void> {
-      await fetchJSON(`${base}/api/v1/models/select`, {
+      await fetchJSON(`${base}/models/select`, {
         method: "POST",
         body: JSON.stringify(req),
       })
     },
     async metrics(): Promise<MetricsResponse> {
-      const data = await fetchJSON(`${base}/api/v1/metrics`)
+      const data = await fetchJSON(`${base}/metrics`)
       return data as MetricsResponse
     },
     async getRemoteFile(path: string): Promise<RemoteFileResponse> {
-      const url = new URL(`${base}/api/v1/remote-file`)
+      const url = new URL(`${base}/vim`)
       url.searchParams.set("path", path)
       const data = await fetchJSON(url.toString())
       return data as RemoteFileResponse
     },
     async putRemoteFile(path: string, content: string, expectedHash: string): Promise<RemoteFileResponse> {
-      const data = await fetchJSON(`${base}/api/v1/remote-file`, {
+      const data = await fetchJSON(`${base}/vim`, {
         method: "POST",
         body: JSON.stringify({ path, content, expected_hash: expectedHash }),
       })
       return data as RemoteFileResponse
     },
     async sshInfo(): Promise<SSHInfoResponse> {
-      const data = await fetchJSON(`${base}/api/v1/ssh-info`)
+      const data = await fetchJSON(`${base}/ssh`)
       return data as SSHInfoResponse
     },
     async plan(req: PlanRequest): Promise<PlanResponse> {
       let resp: Response
       try {
-        resp = await fetch(`${base}/api/v1/plan`, {
+        resp = await fetch(`${base}/plan`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(req),
         })
       } catch (err) {
-        throw new Error(`API request failed (/api/v1/plan): ${err instanceof Error ? err.message : String(err)}`)
+        throw new Error(`API request failed (/plan): ${err instanceof Error ? err.message : String(err)}`)
       }
       const body = await safeReadBody(resp)
       if (!resp.ok) {
@@ -295,7 +295,7 @@ export async function streamRunEvents(
   const controller = signal ? null : new AbortController()
   const requestSignal = signal ?? controller?.signal
   const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null
-  const resp = await fetch(`${base}/api/v1/runs/${runID}/events?after_seq=${afterSeq}&limit=${limit}`, {
+  const resp = await fetch(`${base}/runs/${runID}/events?after_seq=${afterSeq}&limit=${limit}`, {
     method: "GET",
     headers: { Accept: "text/event-stream" },
     signal: requestSignal,
@@ -338,12 +338,12 @@ export async function streamRunEvents(
 
 export async function getRun(baseUrl: string, runID: string): Promise<ApiResponse> {
   const base = baseUrl.replace(/\/$/, "")
-  return fetchJSON(`${base}/api/v1/runs/${runID}`) as Promise<ApiResponse>
+  return fetchJSON(`${base}/runs/${runID}`) as Promise<ApiResponse>
 }
 
 export async function createRun(baseUrl: string, req: ReplRequest): Promise<{ run_id: string; run_status: string }> {
   const base = baseUrl.replace(/\/$/, "")
-  const result = await fetchJSON(`${base}/api/v1/runs`, {
+  const result = await fetchJSON(`${base}/runs`, {
     method: "POST",
     body: JSON.stringify(req),
   }) as Promise<{ run_id: string; run_status: string }>
@@ -353,7 +353,7 @@ export async function createRun(baseUrl: string, req: ReplRequest): Promise<{ ru
 export async function getLatestRun(baseUrl: string, sessionID: string): Promise<ApiResponse | null> {
   const base = baseUrl.replace(/\/$/, "")
   try {
-    return await fetchJSON(`${base}/api/v1/runs/${encodeURIComponent(sessionID)}?latest=1`) as ApiResponse
+    return await fetchJSON(`${base}/runs/${encodeURIComponent(sessionID)}?latest=1`) as ApiResponse
   } catch {
     return null
   }
@@ -363,13 +363,13 @@ export async function listRuns(baseUrl: string, sessionID: string, status = "", 
   const base = baseUrl.replace(/\/$/, "")
   const suffix = status ? `&status=${encodeURIComponent(status)}` : ""
   const cursorPart = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
-  const data = await fetchJSON(`${base}/api/v1/runs?session=${encodeURIComponent(sessionID)}&limit=20${suffix}${cursorPart}`) as { runs?: ApiResponse[]; next_cursor?: string }
+  const data = await fetchJSON(`${base}/runs?session=${encodeURIComponent(sessionID)}&limit=20${suffix}${cursorPart}`) as { runs?: ApiResponse[]; next_cursor?: string }
   return { runs: data.runs ?? [], next_cursor: data.next_cursor }
 }
 
 export async function cancelRun(baseUrl: string, runID: string): Promise<void> {
   const base = baseUrl.replace(/\/$/, "")
-  await fetchJSON(`${base}/api/v1/runs/${runID}?action=cancel`, { method: "POST" })
+  await fetchJSON(`${base}/runs/${runID}?action=cancel`, { method: "POST" })
 }
 
 export async function replStream(

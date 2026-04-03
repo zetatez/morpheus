@@ -39,19 +39,19 @@ export function createClient(baseUrl) {
             return normalizeResponse(raw);
         },
         async sessions(query) {
-            const url = new URL(`${base}/api/v1/sessions`);
+            const url = new URL(`${base}/sessions`);
             if (query)
                 url.searchParams.set("q", query);
             const data = await fetchJSON(url.toString());
             return (data.sessions ?? []);
         },
         async loadSession(id) {
-            await fetchJSON(`${base}/api/v1/sessions/${encodeURIComponent(id)}/load`, {
+            await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}/load`, {
                 method: "POST",
             });
         },
         async getSession(id) {
-            const data = await fetchJSON(`${base}/api/v1/sessions/${encodeURIComponent(id)}`);
+            const data = await fetchJSON(`${base}/sessions/${encodeURIComponent(id)}`);
             const raw = data;
             return {
                 id: String(raw.id ?? id),
@@ -59,60 +59,60 @@ export function createClient(baseUrl) {
             };
         },
         async skills(query) {
-            const url = new URL(`${base}/api/v1/skills`);
+            const url = new URL(`${base}/skills`);
             if (query)
                 url.searchParams.set("q", query);
             const data = await fetchJSON(url.toString());
             return data;
         },
         async loadSkill(name) {
-            const data = await fetchJSON(`${base}/api/v1/skills/${encodeURIComponent(name)}/load`, {
+            const data = await fetchJSON(`${base}/skills/${encodeURIComponent(name)}/load`, {
                 method: "POST",
             });
             return data;
         },
         async models() {
-            const data = await fetchJSON(`${base}/api/v1/models`);
+            const data = await fetchJSON(`${base}/models`);
             return data;
         },
         async selectModel(req) {
-            await fetchJSON(`${base}/api/v1/models/select`, {
+            await fetchJSON(`${base}/models/select`, {
                 method: "POST",
                 body: JSON.stringify(req),
             });
         },
         async metrics() {
-            const data = await fetchJSON(`${base}/api/v1/metrics`);
+            const data = await fetchJSON(`${base}/metrics`);
             return data;
         },
         async getRemoteFile(path) {
-            const url = new URL(`${base}/api/v1/remote-file`);
+            const url = new URL(`${base}/vim`);
             url.searchParams.set("path", path);
             const data = await fetchJSON(url.toString());
             return data;
         },
         async putRemoteFile(path, content, expectedHash) {
-            const data = await fetchJSON(`${base}/api/v1/remote-file`, {
+            const data = await fetchJSON(`${base}/vim`, {
                 method: "POST",
                 body: JSON.stringify({ path, content, expected_hash: expectedHash }),
             });
             return data;
         },
         async sshInfo() {
-            const data = await fetchJSON(`${base}/api/v1/ssh-info`);
+            const data = await fetchJSON(`${base}/ssh`);
             return data;
         },
         async plan(req) {
             let resp;
             try {
-                resp = await fetch(`${base}/api/v1/plan`, {
+                resp = await fetch(`${base}/plan`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(req),
                 });
             }
             catch (err) {
-                throw new Error(`API request failed (/api/v1/plan): ${err instanceof Error ? err.message : String(err)}`);
+                throw new Error(`API request failed (/plan): ${err instanceof Error ? err.message : String(err)}`);
             }
             const body = await safeReadBody(resp);
             if (!resp.ok) {
@@ -127,7 +127,7 @@ export async function streamRunEvents(baseUrl, runID, afterSeq, onEvent, signal,
     const controller = signal ? null : new AbortController();
     const requestSignal = signal ?? controller?.signal;
     const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
-    const resp = await fetch(`${base}/api/v1/runs/${runID}/events?after_seq=${afterSeq}&limit=${limit}`, {
+    const resp = await fetch(`${base}/runs/${runID}/events?after_seq=${afterSeq}&limit=${limit}`, {
         method: "GET",
         headers: { Accept: "text/event-stream" },
         signal: requestSignal,
@@ -175,11 +175,11 @@ export async function streamRunEvents(baseUrl, runID, afterSeq, onEvent, signal,
 }
 export async function getRun(baseUrl, runID) {
     const base = baseUrl.replace(/\/$/, "");
-    return fetchJSON(`${base}/api/v1/runs/${runID}`);
+    return fetchJSON(`${base}/runs/${runID}`);
 }
 export async function createRun(baseUrl, req) {
     const base = baseUrl.replace(/\/$/, "");
-    const result = await fetchJSON(`${base}/api/v1/runs`, {
+    const result = await fetchJSON(`${base}/runs`, {
         method: "POST",
         body: JSON.stringify(req),
     });
@@ -188,7 +188,7 @@ export async function createRun(baseUrl, req) {
 export async function getLatestRun(baseUrl, sessionID) {
     const base = baseUrl.replace(/\/$/, "");
     try {
-        return await fetchJSON(`${base}/api/v1/runs/${encodeURIComponent(sessionID)}?latest=1`);
+        return await fetchJSON(`${base}/runs/${encodeURIComponent(sessionID)}?latest=1`);
     }
     catch {
         return null;
@@ -198,12 +198,12 @@ export async function listRuns(baseUrl, sessionID, status = "", cursor = "") {
     const base = baseUrl.replace(/\/$/, "");
     const suffix = status ? `&status=${encodeURIComponent(status)}` : "";
     const cursorPart = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-    const data = await fetchJSON(`${base}/api/v1/runs?session=${encodeURIComponent(sessionID)}&limit=20${suffix}${cursorPart}`);
+    const data = await fetchJSON(`${base}/runs?session=${encodeURIComponent(sessionID)}&limit=20${suffix}${cursorPart}`);
     return { runs: data.runs ?? [], next_cursor: data.next_cursor };
 }
 export async function cancelRun(baseUrl, runID) {
     const base = baseUrl.replace(/\/$/, "");
-    await fetchJSON(`${base}/api/v1/runs/${runID}?action=cancel`, { method: "POST" });
+    await fetchJSON(`${base}/runs/${runID}?action=cancel`, { method: "POST" });
 }
 export async function replStream(baseUrl, req, onEvent, signal) {
     const base = baseUrl.replace(/\/$/, "");

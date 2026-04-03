@@ -370,7 +370,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/sessions/{id}/fork": map[string]interface{}{
+			"/sessions/{id}/fork": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Fork session",
 					"operationId": "forkSession",
@@ -382,7 +382,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/sessions/{id}/share": map[string]interface{}{
+			"/sessions/{id}/share": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Share session",
 					"operationId": "shareSession",
@@ -404,7 +404,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/sessions/{id}/summarize": map[string]interface{}{
+			"/sessions/{id}/summarize": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Summarize session",
 					"operationId": "summarizeSession",
@@ -485,7 +485,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/remote-file": map[string]interface{}{
+			"/vim": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Read remote file",
 					"operationId": "readRemoteFile",
@@ -519,266 +519,12 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/ssh-info": map[string]interface{}{
+			"/ssh": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get SSH info",
 					"operationId": "getSSHInfo",
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "SSH info"},
-					},
-				},
-			},
-			"/ws": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "WebSocket endpoint",
-					"operationId": "websocket",
-					"responses": map[string]interface{}{
-						"101": map[string]interface{}{"description": "Switching protocols"},
-					},
-				},
-			},
-			"/repl": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "REPL endpoint",
-					"operationId": "repl",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "REPL response"},
-					},
-				},
-			},
-			"/repl/stream": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "Streaming REPL",
-					"operationId": "replStream",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "SSE stream",
-							"content": map[string]interface{}{
-								"text/event-stream": map[string]interface{}{},
-							},
-						},
-					},
-				},
-			},
-			"/config": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Get configuration",
-					"operationId": "getConfig",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Config data"},
-					},
-				},
-				"patch": map[string]interface{}{
-					"summary":     "Update configuration",
-					"operationId": "updateConfig",
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Config updated"},
-					},
-				},
-			},
-			"/permission": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "List pending permissions",
-					"operationId": "listPermissions",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Permission list"},
-					},
-				},
-			},
-			"/permission/{requestID}/reply": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "Reply to permission request",
-					"operationId": "replyPermission",
-					"parameters": []map[string]interface{}{
-						{"name": "requestID", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
-					},
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"reply": map[string]string{"type": "string", "enum": "allow,deny"},
-									},
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Reply sent"},
-					},
-				},
-			},
-			"/mcp": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Get MCP servers status",
-					"operationId": "getMCPServers",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "MCP servers status"},
-					},
-				},
-				"post": map[string]interface{}{
-					"summary":     "Add MCP server",
-					"operationId": "addMCPServer",
-					"requestBody": map[string]interface{}{
-						"required": true,
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"name":      map[string]string{"type": "string"},
-										"transport": map[string]string{"type": "string"},
-										"command":   map[string]string{"type": "string"},
-										"url":       map[string]string{"type": "string"},
-									},
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"201": map[string]interface{}{"description": "MCP server added"},
-					},
-				},
-			},
-			"/mcp/{name}/connect": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "Connect MCP server",
-					"operationId": "connectMCPServer",
-					"parameters": []map[string]interface{}{
-						{"name": "name", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Connected"},
-					},
-				},
-			},
-			"/mcp/{name}/disconnect": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "Disconnect MCP server",
-					"operationId": "disconnectMCPServer",
-					"parameters": []map[string]interface{}{
-						{"name": "name", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Disconnected"},
-					},
-				},
-			},
-			"/find": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Text search",
-					"operationId": "textSearch",
-					"parameters": []map[string]interface{}{
-						{"name": "pattern", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
-						{"name": "path", "in": "query", "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Search results"},
-					},
-				},
-			},
-			"/find/file": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "File search",
-					"operationId": "fileSearch",
-					"parameters": []map[string]interface{}{
-						{"name": "query", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
-						{"name": "limit", "in": "query", "schema": map[string]string{"type": "integer"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "File results"},
-					},
-				},
-			},
-			"/find/symbol": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Symbol search",
-					"operationId": "symbolSearch",
-					"parameters": []map[string]interface{}{
-						{"name": "query", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Symbol results"},
-					},
-				},
-			},
-			"/file": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "List files",
-					"operationId": "listFiles",
-					"parameters": []map[string]interface{}{
-						{"name": "path", "in": "query", "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "File list"},
-					},
-				},
-			},
-			"/file/content": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Read file content",
-					"operationId": "readFileContent",
-					"parameters": []map[string]interface{}{
-						{"name": "path", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "File content"},
-					},
-				},
-			},
-			"/file/status": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Git status",
-					"operationId": "gitStatus",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Git status"},
-					},
-				},
-			},
-			"/project/": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "List projects",
-					"operationId": "listProjects",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Project list"},
-					},
-				},
-			},
-			"/project/current": map[string]interface{}{
-				"get": map[string]interface{}{
-					"summary":     "Get current project",
-					"operationId": "getCurrentProject",
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{"description": "Current project"},
-					},
-				},
-			},
-			"/project/git/init": map[string]interface{}{
-				"post": map[string]interface{}{
-					"summary":     "Initialize git repository",
-					"operationId": "gitInit",
-					"requestBody": map[string]interface{}{
-						"content": map[string]interface{}{
-							"application/json": map[string]interface{}{
-								"schema": map[string]interface{}{
-									"type": "object",
-									"properties": map[string]interface{}{
-										"directory": map[string]string{"type": "string"},
-									},
-								},
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"201": map[string]interface{}{"description": "Git initialized"},
 					},
 				},
 			},
@@ -840,6 +586,158 @@ func (s *APIServer) handleConfigUpdate(w http.ResponseWriter, updates map[string
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "updated": updates})
+}
+
+func (s *APIServer) handleConfigProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	providers := []map[string]interface{}{
+		{
+			"id":       "openai",
+			"name":     "OpenAI",
+			"requires": []string{"api_key"},
+		},
+		{
+			"id":       "deepseek",
+			"name":     "DeepSeek",
+			"requires": []string{"api_key"},
+		},
+		{
+			"id":       "anthropic",
+			"name":     "Anthropic",
+			"requires": []string{"api_key"},
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"providers": providers})
+}
+
+func (s *APIServer) handleProviderOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	providerID := strings.TrimPrefix(r.URL.Path, "/provider/")
+	providerID = strings.TrimSuffix(providerID, "/oauth/authorize")
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"provider_id": providerID,
+		"auth_url":    fmt.Sprintf("https://example.com/oauth/authorize?provider=%s", providerID),
+	})
+}
+
+func (s *APIServer) handleProviderOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	providerID := strings.TrimPrefix(r.URL.Path, "/provider/")
+	providerID = strings.TrimSuffix(providerID, "/oauth/callback")
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"provider_id": providerID,
+		"status":      "authenticated",
+	})
+}
+
+func (s *APIServer) handleMCPAuth(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/mcp/")
+	name = strings.TrimSuffix(name, "/auth")
+	if name == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":       true,
+			"name":     name,
+			"auth_url": fmt.Sprintf("https://example.com/mcp/%s/auth/start", name),
+		})
+	case http.MethodDelete:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":     true,
+			"name":   name,
+			"status": "auth_removed",
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleMCPAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/mcp/")
+	name = strings.TrimSuffix(name, "/auth/callback")
+	if name == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":     true,
+		"name":   name,
+		"status": "authenticated",
+	})
+}
+
+func (s *APIServer) handleMCPAuthenticate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/mcp/")
+	name = strings.TrimSuffix(name, "/auth/authenticate")
+	if name == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":     true,
+		"name":   name,
+		"status": "authenticating",
+	})
 }
 
 func (s *APIServer) handlePermission(w http.ResponseWriter, r *http.Request) {

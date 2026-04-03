@@ -270,9 +270,9 @@ morpheus serve --config path/to/config.yaml
 | GET | `/project/current` | Get current project |
 | POST | `/project/git/init` | Initialize git |
 | POST | `/shell` | Execute shell command |
-| GET | `/remote-file` | Read remote file |
-| POST | `/remote-file` | Write remote file |
-| GET | `/ssh-info` | SSH info |
+| GET | `/vim` | Read remote file |
+| POST | `/vim` | Write remote file |
+| GET | `/ssh` | SSH info |
 | GET | `/ws` | WebSocket endpoint |
 | POST | `/repl` | REPL endpoint |
 | POST | `/repl/stream` | Streaming REPL |
