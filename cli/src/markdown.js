@@ -91,22 +91,22 @@ function getLangLabel(lang) {
 }
 
 const COLORS = {
-  keyword: "#00e5ff",
-  keyword2: "#00e5ff",
+  keyword: "#ffa657",
+  keyword2: "#ffa657",
   string: "#98c379",
-  number: "#00e5ff",
+  number: "#ffa657",
   comment: "#5c6370",
-  function: "#6ec1e4",
+  function: "#ffa657",
   variable: "#6ec1e4",
-  type: "#6ec1e4",
+  type: "#ffa657",
   operator: "#56b6c2",
   punctuation: "#abb2bf",
-  attribute: "#00e5ff",
-  builtin: "#6ec1e4",
-  constant: "#00e5ff",
-  selector: "#00e5ff",
+  attribute: "#ffa657",
+  builtin: "#ffa657",
+  constant: "#ffa657",
+  selector: "#ffa657",
   property: "#6ec1e4",
-  tag: "#00e5ff",
+  tag: "#ffa657",
 };
 
 const KEYWORDS = {
@@ -392,11 +392,11 @@ function renderCodeBlock(out, lang, lines, colors) {
 }
 
 function renderInlineCode(text, colors) {
-  return { text, fg: colors.accent || "#4fc1ff" };
+  return { text, fg: "#ffa657" };
 }
 
 function renderStrong(text, colors) {
-  return { text, fg: "#00e5ff", attributes: TextAttributes.BOLD };
+  return { text, fg: "#ffa657", attributes: TextAttributes.BOLD };
 }
 
 function renderEmphasis(text, colors) {
@@ -667,8 +667,8 @@ export function renderMarkdownLines(content, colors) {
       const text = heading[2] || "";
       const lowered = text.toLowerCase().trim();
 
-      const headingColors = ["#00e5ff", "#4fc1ff", "#6ec1e4", "#89bdff", "#a0c7ff", "#b8d4ed"];
-      const headingFg = headingColors[level - 1] || "#b8d4ed";
+      const headingColors = ["#ffa657", "#ffb347", "#ffc266", "#ffd180", "#ffe0a0", "#fff0c0"];
+      const headingFg = headingColors[level - 1] || "#fff0c0";
       const attributes = TextAttributes.BOLD;
 
       let fg;
