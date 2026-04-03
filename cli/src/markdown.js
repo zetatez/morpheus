@@ -6,9 +6,30 @@ let shikiInitPromise = null;
 let shikiReady = false;
 
 const SHIKI_LANGS = [
-  "javascript", "typescript", "python", "go", "rust", "java", "c", "cpp",
-  "bash", "sh", "json", "yaml", "toml", "html", "css", "scss", "sql",
-  "diff", "markdown", "text", "jsx", "tsx", "vue", "svelte",
+  "javascript",
+  "typescript",
+  "python",
+  "go",
+  "rust",
+  "java",
+  "c",
+  "cpp",
+  "bash",
+  "sh",
+  "json",
+  "yaml",
+  "toml",
+  "html",
+  "css",
+  "scss",
+  "sql",
+  "diff",
+  "markdown",
+  "text",
+  "jsx",
+  "tsx",
+  "vue",
+  "svelte",
 ];
 
 async function initShikiHighlighter() {
@@ -40,7 +61,6 @@ function highlightWithShiki(code, lang) {
       lang: lang || "text",
       theme: "github-dark",
     });
-    console.error("DEBUG shikiTokens:", JSON.stringify(result.tokens.slice(0, 6)));
     return result.tokens;
   } catch (e) {
     console.error("Shiki error:", e?.message);
@@ -453,32 +473,17 @@ function renderCodeBlock(out, lang, lines, colors) {
     const shikiTokens = highlightWithShiki(code, lang);
 
     if (shikiTokens) {
-      // Shiki: tokens is 2D array [line][token]
-      for (let i = 0; i < shikiTokens.length; i++) {
-        const lineTokens = shikiTokens[i];
+      for (const lineTokens of shikiTokens) {
         if (lineTokens.length === 0) {
-          // Empty line - push indent only
           out.push({ text: "  ", fg: colors.code });
           continue;
         }
         let lineText = "";
-        let currentFg = null;
-        let lineIndent = "  ";
-
+        const lineFg = lineTokens[0].color || colors.code;
         for (const token of lineTokens) {
-          const tokenFg = token.color || colors.code;
-          if (currentFg === tokenFg) {
-            lineText += token.content;
-          } else {
-            if (currentFg !== null) {
-              out.push({ text: lineIndent + lineText, fg: currentFg });
-              lineIndent = "";
-            }
-            lineText = token.content;
-            currentFg = tokenFg;
-          }
+          lineText += token.content;
         }
-        out.push({ text: lineIndent + lineText, fg: currentFg || colors.code });
+        out.push({ text: "  " + lineText, fg: lineFg });
       }
     } else {
       // Fall back to no highlighting (line-by-line, single color)
