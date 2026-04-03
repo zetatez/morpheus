@@ -305,14 +305,45 @@ func toMCPServerConfigs(servers []config.MCPServerConfig) []mcp.ServerConfig {
 }
 
 func (rt *Runtime) RunSubAgent(ctx context.Context, prompt string, allowedTools []string) (string, error) {
-	subID := fmt.Sprintf("subagent-%d", time.Now().UnixNano())
+	return rt.RunSubAgentWithBackground(ctx, prompt, allowedTools, false)
+}
+
+func (rt *Runtime) RunSubAgentWithBackground(ctx context.Context, prompt string, allowedTools []string, background bool) (string, error) {
+	return rt.runSubAgentImpl(ctx, prompt, allowedTools, 0, background, false)
+}
+
+func (rt *Runtime) RunSubAgentFork(ctx context.Context, prompt string, allowedTools []string) (string, error) {
+	return rt.runSubAgentImpl(ctx, prompt, allowedTools, 0, false, true)
+}
+
+func (rt *Runtime) runSubAgentImpl(ctx context.Context, prompt string, allowedTools []string, depth int, isBackground bool, forkIsolated bool) (string, error) {
+	const maxSubagentDepth = 3
+
+	if depth >= maxSubagentDepth {
+		return "", fmt.Errorf("max subagent nesting depth (%d) exceeded", maxSubagentDepth)
+	}
+
+	subID := fmt.Sprintf("subagent-%d-%d", time.Now().UnixNano(), depth)
 	ctx = withTeamSession(ctx, subID)
+	ctx = withSubagentDepth(ctx, depth+1)
+	if forkIsolated {
+		ctx = withForkIsolation(ctx, true)
+	}
+
 	if len(allowedTools) > 0 {
 		ctx = execpkg.WithAllowedTools(ctx, allowedTools)
 	}
-	if teamID := agentTeamIDFromContext(ctx); teamID != "" {
+	if teamID := agentTeamIDFromContext(ctx); teamID != "" && !forkIsolated {
 		ctx = withAgentTeam(ctx, teamID)
 	}
+
+	if isBackground {
+		go func() {
+			_, _ = rt.AgentLoop(ctx, subID, UserInput{Text: prompt}, nil, AgentModeBuild)
+		}()
+		return "background agent started: " + subID, nil
+	}
+
 	resp, err := rt.AgentLoop(ctx, subID, UserInput{Text: prompt}, nil, AgentModeBuild)
 	if err != nil {
 		return "", err
@@ -2867,6 +2898,64 @@ func (rt *Runtime) truncateToolResult(ctx context.Context, sessionID, tool strin
 		}
 	}
 	return data
+}
+
+func (rt *Runtime) buildReflectionPrompt(results []sdk.ToolResult, goal string) string {
+	if len(results) == 0 {
+		return ""
+	}
+
+	var successfulTools []string
+	var failedTools []string
+	for _, r := range results {
+		if r.Success {
+			if tool, ok := r.Data["tool"].(string); ok {
+				successfulTools = append(successfulTools, tool)
+			}
+		} else {
+			if tool, ok := r.Data["tool"].(string); ok {
+				failedTools = append(failedTools, tool)
+			}
+			if r.Error != "" {
+				failedTools = append(failedTools, r.Error)
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n## Reflection\n")
+	b.WriteString("After reviewing your recent actions, consider the following:\n\n")
+
+	if len(failedTools) > 0 && len(failedTools) >= len(successfulTools) {
+		b.WriteString("1. **Failure Analysis**: You've had more failures than successes. Consider:\n")
+		b.WriteString("   - Are you taking the right approach?\n")
+		b.WriteString("   - Could there be a simpler way to achieve the same goal?\n")
+		b.WriteString("   - Are there missing prerequisites or permissions?\n")
+	}
+
+	if len(results) >= 3 {
+		b.WriteString("2. **Progress Check**: Based on recent tool results:\n")
+		b.WriteString("   - What has been accomplished so far?\n")
+		b.WriteString("   - Is the remaining work necessary?\n")
+		b.WriteString("   - Should you verify intermediate results before proceeding?\n")
+	}
+
+	toolTypes := make(map[string]int)
+	for _, r := range results {
+		if tool, ok := r.Data["tool"].(string); ok {
+			toolTypes[tool]++
+			if toolTypes[tool] >= 3 {
+				b.WriteString("3. **Loop Detection**: You've used the same tool multiple times.\n")
+				b.WriteString("   - If it's not working, try a different approach.\n")
+				b.WriteString("   - Consider combining multiple steps into one.\n")
+				break
+			}
+		}
+	}
+
+	b.WriteString("\nProceed with the most promising approach. If stuck, consider asking the user for clarification.")
+
+	return b.String()
 }
 
 func contains(values []string, target string) bool {

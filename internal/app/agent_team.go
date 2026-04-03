@@ -52,6 +52,10 @@ type teamMemberState struct {
 
 type teamContextKey struct{}
 type teamSessionContextKey struct{}
+type subagentDepthContextKey struct{}
+type forkIsolationContextKey struct{}
+type undercoverModeContextKey struct{}
+type antiDistillationContextKey struct{}
 
 func withAgentTeam(ctx context.Context, teamID string) context.Context {
 	return context.WithValue(ctx, teamContextKey{}, strings.TrimSpace(teamID))
@@ -59,6 +63,62 @@ func withAgentTeam(ctx context.Context, teamID string) context.Context {
 
 func withTeamSession(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, teamSessionContextKey{}, strings.TrimSpace(sessionID))
+}
+
+func withSubagentDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, subagentDepthContextKey{}, depth)
+}
+
+func withForkIsolation(ctx context.Context, isolated bool) context.Context {
+	return context.WithValue(ctx, forkIsolationContextKey{}, isolated)
+}
+
+func withUndercoverMode(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, undercoverModeContextKey{}, enabled)
+}
+
+func undercoverModeFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if value, ok := ctx.Value(undercoverModeContextKey{}).(bool); ok {
+		return value
+	}
+	return false
+}
+
+func withAntiDistillation(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, antiDistillationContextKey{}, enabled)
+}
+
+func antiDistillationFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if value, ok := ctx.Value(antiDistillationContextKey{}).(bool); ok {
+		return value
+	}
+	return false
+}
+
+func forkIsolationFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if value, ok := ctx.Value(forkIsolationContextKey{}).(bool); ok {
+		return value
+	}
+	return false
+}
+
+func subagentDepthFromContext(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	if value, ok := ctx.Value(subagentDepthContextKey{}).(int); ok {
+		return value
+	}
+	return 0
 }
 
 func agentTeamIDFromContext(ctx context.Context) string {

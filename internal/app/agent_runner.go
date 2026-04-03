@@ -14,6 +14,47 @@ import (
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
 
+const (
+	reflectionEnabled        = true
+	maxReflectionSuggestions = 3
+)
+
+type reflectionState struct {
+	consecutiveFailures  int
+	consecutiveSuccesses int
+	lastReflection       string
+	suggestions          []string
+}
+
+func newReflectionState() *reflectionState {
+	return &reflectionState{
+		consecutiveFailures:  0,
+		consecutiveSuccesses: 0,
+		suggestions:          []string{},
+	}
+}
+
+func (rs *reflectionState) recordResult(success bool) {
+	if success {
+		rs.consecutiveSuccesses++
+		rs.consecutiveFailures = 0
+	} else {
+		rs.consecutiveFailures++
+		rs.consecutiveSuccesses = 0
+	}
+}
+
+func (rs *reflectionState) shouldReflect() bool {
+	return rs.consecutiveFailures >= 2 || rs.consecutiveSuccesses >= 3
+}
+
+func (rs *reflectionState) addSuggestion(suggestion string) {
+	if len(rs.suggestions) >= maxReflectionSuggestions {
+		rs.suggestions = rs.suggestions[1:]
+	}
+	rs.suggestions = append(rs.suggestions, suggestion)
+}
+
 type runnerCallbacks struct {
 	emit             replEmitter
 	callChat         func(context.Context, []map[string]any, []map[string]any, any, replEmitter) (chatResponse, error)
@@ -125,7 +166,8 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 		structuredName = ""
 	}
 	rt.logger.Info("runAgentLoopWithRun collected tools", zap.String("run_id", run.ID), zap.String("route", formatRouteName(route)), zap.Strings("tags", classification.Tags), zap.Strings("suggested_tools", classification.SuggestedTools), zap.String("confidence", classification.Confidence), zap.Int("tool_count", len(tools)), zap.Any("tool_choice", toolChoice), zap.Int("name_map", len(nameMap)), zap.String("structured_name", structuredName), zap.Strings("tools", sortedToolNames(tools)))
-	baseMessages := rt.buildMessagesForRoute(sessionID, route)
+	forkIsolated := forkIsolationFromContext(ctx)
+	baseMessages := rt.buildMessagesForRoute(ctx, sessionID, route, forkIsolated)
 	if normalized.Text != "" || len(normalized.Parts) > 0 {
 		baseMessages = append(baseMessages, map[string]any{"role": "user", "content": normalized.Text})
 	}
@@ -146,6 +188,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	plan := sdk.Plan{Summary: normalized.Text, Status: sdk.PlanStatusInProgress}
 	results := []sdk.ToolResult{}
 	actionRepeats := map[string]int{}
+	reflection := newReflectionState()
 	planReq := sdk.PlanRequest{ConversationID: sessionID, Prompt: normalized.Text, Intent: "agent"}
 	retries := 0
 	freshInfoRetried := false
@@ -400,6 +443,18 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You now have enough fresh evidence from multiple successful web.fetch calls. Stop fetching and answer the user's question directly in one concise reply, citing the fetched source names or URLs briefly."})
 				case freshInfoFetches >= 3:
 					baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "You already have a successful web.fetch result and have tried several sources. Stop browsing and answer directly using the best fetched evidence you have."})
+				}
+			}
+
+			if reflectionEnabled {
+				reflection.recordResult(result.Success)
+				if reflection.shouldReflect() && step < maxAgentSteps-1 {
+					reflectionPrompt := rt.buildReflectionPrompt(results, normalized.Text)
+					if reflectionPrompt != "" {
+						baseMessages = append(baseMessages, map[string]any{"role": "system", "content": reflectionPrompt})
+						reflection.consecutiveSuccesses = 0
+						reflection.consecutiveFailures = 0
+					}
 				}
 			}
 

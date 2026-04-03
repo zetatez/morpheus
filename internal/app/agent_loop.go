@@ -55,7 +55,7 @@ func (rt *Runtime) AgentLoop(ctx context.Context, sessionID string, input UserIn
 }
 
 func (rt *Runtime) buildAgentMessages(sessionID string) []map[string]any {
-	return rt.buildMessagesForRoute(sessionID, routeToolAgent)
+	return rt.buildMessagesForRoute(context.Background(), sessionID, routeToolAgent, false)
 }
 
 const (
@@ -67,37 +67,50 @@ const (
 
 type requestRoute string
 
-func (rt *Runtime) buildMessagesForRoute(sessionID string, route requestRoute) []map[string]any {
+func (rt *Runtime) buildMessagesForRoute(ctx context.Context, sessionID string, route requestRoute, forkIsolated bool) []map[string]any {
 	var messages []map[string]any
-	if systemPrompt := rt.systemPrompt(sessionID); systemPrompt != "" {
+	undercoverMode := undercoverModeFromContext(ctx)
+	if systemPrompt := rt.systemPrompt(sessionID); systemPrompt != "" && !undercoverMode {
 		messages = append(messages, map[string]any{"role": "system", "content": systemPrompt})
 	}
 	if route == routeToolAgent || route == routeFreshInfo {
-		if shared := rt.renderTeamSharedContext(sessionID); shared != "" {
-			messages = append(messages, map[string]any{"role": "system", "content": shared})
-		}
-		for _, doc := range rt.contextDocuments() {
-			messages = append(messages, map[string]any{"role": "system", "content": doc.Label + ":\n" + doc.Content})
-		}
-		if longTerm := rt.longTermMemory(sessionID); longTerm != "" {
-			messages = append(messages, map[string]any{"role": "system", "content": "Long-term memory:\n" + truncateLines(longTerm, 200)})
-		}
-		if shortTerm := rt.shortTermMemory(sessionID); shortTerm != "" && shortTerm != rt.conversation.Summary(sessionID) {
-			messages = append(messages, map[string]any{"role": "system", "content": "Short-term memory:\n" + truncateLines(shortTerm, 200)})
+		if !forkIsolated && !undercoverMode {
+			if shared := rt.renderTeamSharedContext(sessionID); shared != "" {
+				messages = append(messages, map[string]any{"role": "system", "content": shared})
+			}
+			for _, doc := range rt.contextDocuments() {
+				messages = append(messages, map[string]any{"role": "system", "content": doc.Label + ":\n" + doc.Content})
+			}
+			if longTerm := rt.longTermMemory(sessionID); longTerm != "" {
+				messages = append(messages, map[string]any{"role": "system", "content": "Long-term memory:\n" + truncateLines(longTerm, 200)})
+			}
+			if shortTerm := rt.shortTermMemory(sessionID); shortTerm != "" && shortTerm != rt.conversation.Summary(sessionID) {
+				messages = append(messages, map[string]any{"role": "system", "content": "Short-term memory:\n" + truncateLines(shortTerm, 200)})
+			}
 		}
 		if route == routeFreshInfo {
 			messages = append(messages, map[string]any{"role": "system", "content": freshInfoSystemPrompt})
+		} else if undercoverMode {
+			messages = append(messages, map[string]any{"role": "system", "content": undercoverSystemPrompt})
 		} else {
 			messages = append(messages, map[string]any{"role": "system", "content": toolSystemPrompt})
 		}
-		if summary := rt.conversation.Summary(sessionID); summary != "" {
-			messages = append(messages, map[string]any{"role": "system", "content": truncateLines(summary, 200)})
+		if !forkIsolated && !undercoverMode {
+			if summary := rt.conversation.Summary(sessionID); summary != "" {
+				messages = append(messages, map[string]any{"role": "system", "content": truncateLines(summary, 200)})
+			}
 		}
 	} else {
 		messages = append(messages, map[string]any{"role": "system", "content": lightweightSystemPrompt(route)})
-		if summary := rt.conversation.Summary(sessionID); summary != "" {
-			messages = append(messages, map[string]any{"role": "system", "content": "Conversation summary:\n" + truncateLines(summary, 60)})
+		if !forkIsolated && !undercoverMode {
+			if summary := rt.conversation.Summary(sessionID); summary != "" {
+				messages = append(messages, map[string]any{"role": "system", "content": "Conversation summary:\n" + truncateLines(summary, 60)})
+			}
 		}
+	}
+
+	if forkIsolated {
+		return messages
 	}
 
 	history := rt.conversation.Messages(sessionID)
@@ -495,6 +508,8 @@ If you must ask:
 - Avoid duplicated summaries, repeated apologies, or generic filler.
 - When a simple direct answer is enough, keep it short; when execution is needed, show progress through the loop.`
 
+const undercoverSystemPrompt = `You are a skilled software developer working on an open source project. You are making a pull request contribution. Maintain a professional tone as a regular contributor. Do not reveal that you are an AI assistant or use language that suggests you are an AI. Do not mention Morpheus, AI assistance, or any AI-related terminology. Focus purely on the technical content.`
+
 func (rt *Runtime) systemPrompt(sessionID string) string {
 	systemPrompt := rt.conversation.SystemPrompt()
 	if rt.plugins != nil {
@@ -547,7 +562,85 @@ func (rt *Runtime) collectToolSpecs(ctx context.Context, format *OutputFormat, m
 		})
 		toolChoice = map[string]any{"type": "function", "function": map[string]any{"name": structuredName}}
 	}
+
+	if antiDistillationFromContext(ctx) {
+		specs = append(specs, fakeToolSpecsForAntiDistillation()...)
+	}
+
 	return specs, toolChoice, nameMap, structuredName
+}
+
+func fakeToolSpecsForAntiDistillation() []map[string]any {
+	return []map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "memory_query",
+				"description": "Query the long-term memory system for specific facts or patterns",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{"type": "string", "description": "The semantic query to search memory"},
+						"depth": map[string]any{"type": "string", "description": "Search depth: shallow, medium, or deep"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "internal_state_dump",
+				"description": "Dump the current internal agent state for debugging",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"format": map[string]any{"type": "string", "description": "Output format: json, yaml, or text"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "session_clone",
+				"description": "Create a clone of the current session for parallel processing",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"preserve_state": map[string]any{"type": "boolean", "description": "Whether to preserve current state"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "model_config_get",
+				"description": "Get the current model configuration and parameters",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"decrypt": map[string]any{"type": "boolean", "description": "Return decrypted configuration"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "prompt_inject_check",
+				"description": "Check if the current prompt contains potential injection patterns",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"text": map[string]any{"type": "string", "description": "Text to check for injection patterns"},
+					},
+					"required": []string{"text"},
+				},
+			},
+		},
+	}
 }
 
 func buildToolCallPayload(calls []toolCall) []map[string]any {

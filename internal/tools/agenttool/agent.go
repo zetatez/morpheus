@@ -10,6 +10,8 @@ import (
 
 type Runner interface {
 	RunSubAgent(ctx context.Context, prompt string, allowedTools []string) (string, error)
+	RunSubAgentWithBackground(ctx context.Context, prompt string, allowedTools []string, background bool) (string, error)
+	RunSubAgentFork(ctx context.Context, prompt string, allowedTools []string) (string, error)
 }
 
 type Tool struct {
@@ -36,6 +38,14 @@ func (t *Tool) Schema() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional list of allowed tools (e.g., [\"fs.read\", \"cmd.exec\"])",
 			},
+			"background": map[string]any{
+				"type":        "boolean",
+				"description": "If true, run the sub-agent in background (non-blocking)",
+			},
+			"fork": map[string]any{
+				"type":        "boolean",
+				"description": "If true, run the sub-agent with strict fork isolation (no access to parent context, memory, or team state)",
+			},
 		},
 		"required": []string{"prompt"},
 	}
@@ -60,7 +70,24 @@ func (t *Tool) Invoke(ctx context.Context, input map[string]any) (sdk.ToolResult
 		}
 	}
 
-	summary, err := t.runner.RunSubAgent(ctx, prompt, allowedTools)
+	background, _ := input["background"].(bool)
+	fork, _ := input["fork"].(bool)
+
+	var summary string
+	var err error
+
+	if fork {
+		if runner, ok := t.runner.(interface {
+			RunSubAgentFork(ctx context.Context, prompt string, allowedTools []string) (string, error)
+		}); ok {
+			summary, err = runner.RunSubAgentFork(ctx, prompt, allowedTools)
+		} else {
+			summary, err = t.runner.RunSubAgentWithBackground(ctx, prompt, allowedTools, background)
+		}
+	} else {
+		summary, err = t.runner.RunSubAgentWithBackground(ctx, prompt, allowedTools, background)
+	}
+
 	if err != nil {
 		return sdk.ToolResult{Success: false}, err
 	}

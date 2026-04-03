@@ -74,6 +74,44 @@ func (e *Engine) EvaluateCommand(ctx context.Context, command, workdir string) s
 		}
 	}
 
+	if securityResult := CheckBashSecurity(command); !securityResult.Allowed || securityResult.Level != "low" {
+		decision := sdk.PolicyDecision{
+			Allowed:         securityResult.Allowed,
+			RiskLevel:       e.stringToLevel(securityResult.Level),
+			Action:          sdk.ActionConfirm,
+			RequiresConfirm: true,
+			MatchedFactors:  securityResult.Matches,
+		}
+		if !securityResult.Allowed {
+			decision.Reason = "blocked by static security rules: " + strings.Join(securityResult.Matches, ", ")
+			decision.Action = sdk.ActionDeny
+		} else {
+			decision.Reason = "elevated risk: " + strings.Join(securityResult.Matches, ", ")
+		}
+		return decision
+	}
+
+	if dangerous := CheckZshExtensions(command); len(dangerous) > 0 {
+		return sdk.PolicyDecision{
+			Allowed:         false,
+			RiskLevel:       sdk.RiskHigh,
+			Action:          sdk.ActionDeny,
+			RequiresConfirm: true,
+			MatchedFactors:  dangerous,
+			Reason:          "zsh dangerous extensions: " + strings.Join(dangerous, ", "),
+		}
+	}
+
+	if CheckIFSInjection(command) {
+		return sdk.PolicyDecision{
+			Allowed:         false,
+			RiskLevel:       sdk.RiskHigh,
+			Action:          sdk.ActionDeny,
+			RequiresConfirm: true,
+			Reason:          "IFS injection detected",
+		}
+	}
+
 	factorLevel, matchedFactors := e.evaluateCommand(command)
 	pathLevel := e.evaluatePath(workdir)
 

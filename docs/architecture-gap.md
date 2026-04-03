@@ -216,12 +216,11 @@ Instance.provide(() => {
 
 | 功能 | Morpheus现状 | Claude Code实现 |
 |------|-------------|-----------------|
-| **项目上下文文件** | ❌ 无 | .claude.md 四层加载 |
-| **全局上下文文件** | ❌ 无 | ~/.claude.md |
-| **自动记忆提取** | ❌ Basic | Auto Memory + Dream |
-| **多层记忆系统** | ❌ 2层 | Semantic/Episodic/Working 3层 |
-| **Reflection机制** | ❌ 无 | 自省环节，成功率+25% |
-| **细粒度Bash安全** | ❌ 23种规则 | 23种规则 + 语义分析 |
+| **项目上下文文件** | ✅ 4层加载 (.morpheus.md) | .claude.md 四层加载 |
+| **全局上下文文件** | ✅ ~/.config/morpheus/.morpheus.md | ~/.claude.md |
+| **多层记忆系统** | ✅ 3层 (Working/Episodic/Semantic) | Semantic/Episodic/Working 3层 |
+| **Reflection机制** | ✅ 自省提示注入 | 自省环节，成功率+25% |
+| **细粒度Bash安全** | ✅ 23种规则 + Zsh扩展 + IFS注入 | 23种规则 + 语义分析 |
 | **原生客户端认证** | ❌ 无 | cch Attestation (Bun/Zig) |
 | **卧底模式** | ❌ 无 | Undercover Mode |
 | **反蒸馏机制** | ❌ 无 | Anti-distillation |
@@ -230,7 +229,7 @@ Instance.provide(() => {
 | **插件市场** | ❌ 无 | 完整生态 |
 | **Remote Control协议** | ⚠️ 基础 | 完整远程控制 |
 | **Checkpoints API** | ⚠️ git stash | 完整快照+回滚UI |
-| **Background Agents** | ⚠️ 子Agent异步 | 并行不阻塞 |
+| **Background Agents** | ✅ 支持 background=true 参数 | 并行不阻塞 |
 
 ---
 
@@ -241,39 +240,38 @@ Instance.provide(() => {
 ```
 Claude Code:                    Morpheus:
 ┌─────────────────────┐        ┌─────────────────────┐
-│ CLAUDE.md (4层)     │        │ 无项目上下文文件     │
-│ Auto Memory         │        │ Basic Memory (2层)  │
-│ Context Collapse    │        │ Token阈值压缩       │
-│ Micro Compact       │        │ Prune + Compress    │
-│ Reflection          │        │ 无                  │
+│ CLAUDE.md (4层)     │        │ .morpheus.md (4层)   │
+│ Auto Memory         │        │ Working/Episodic/     │
+│ Context Collapse    │        │ Semantic Memory       │
+│ Micro Compact       │        │ Token阈值压缩       │
+│ Reflection          │        │ ✅ 已实现            │
 └─────────────────────┘        └─────────────────────┘
 ```
 
-**关键差距**：
-- Morpheus 无 CLAUDE.md 等效机制
-- 无自动记忆提取和巩固
-- 无多层记忆系统（Semantic/Episodic/Working）
-- 压缩策略简单，无自适应
+**差距已缩小**：
+- ✅ .morpheus.md 4层加载（system/user/project/local）
+- ✅ 3层记忆系统已实现
+- ✅ Reflection 自省机制已实现
+- ⚠️ 自动记忆提取（Auto-Dream）待实现
 
 ### 5.2 Agent架构对比
 
 ```
 Claude Code:                    Morpheus:
 ┌─────────────────────┐        ┌─────────────────────┐
-│ Subagent (递归)     │        │ Coordinator (DAG)   │
+│ Subagent (递归)     │        │ ✅ 递归嵌套(3层)     │
 │ Agent Teams         │        │ Team Messaging      │
-│ Background Agent    │        │ (无后台执行)        │
-│ Fork (信息隔离)     │        │ (无等效)            │
+│ Background Agent    │        │ ✅ background参数    │
+│ Fork (信息隔离)     │        │ (规划中)            │
 │ Verification Agent  │        │ (无等效)            │
 └─────────────────────┘        └─────────────────────┘
 ```
 
-**关键差距**：
-- Claude Code Subagent 递归调用 query.ts，无限嵌套
-- Claude Code Fork 有严格信息隔离（不能偷看/换模型/同步等待）
-- Claude Code Background Agent 并行不阻塞
-- Claude Code Verification Agent 代码层面对抗性约束
-- Morpheus Coordinator 是DAG调度，不是递归Agent
+**差距已缩小**：
+- ✅ Subagent 递归嵌套已实现（最大深度3层）
+- ✅ Background Agent 已支持（background=true）
+- ⚠️ Fork 信息隔离机制待实现
+- ⚠️ Verification Agent 待实现
 
 ### 5.3 安全架构对比
 
@@ -284,18 +282,19 @@ Claude Code:                    Morpheus:
 │ cch Attestation     │        │ (无原生认证)        │
 │ Undercover Mode     │        │ (无)                │
 │ Anti-distillation   │        │ (无)                │
-│ 23条Bash规则        │        │ Risk Factors正则    │
-│ 语义AST分析         │        │ (无)                │
+│ 23条Bash规则       │        │ ✅ 28条规则         │
+│ 语义AST分析         │        │ ✅ Zsh/IFS检测      │
 │ AI分类器            │        │ (无)                │
 └─────────────────────┘        └─────────────────────┘
 ```
 
-**关键差距**：
-- Claude Code 每层独立失败，Morpheus 是级联
-- Claude Code 有原生客户端认证（Bun/Zig层）
-- Claude Code 有卧底模式和反蒸馏
-- Claude Code 有语义分析（tree-sitter AST）
-- Claude Code 有AI分类器判断未知命令
+**差距已缩小**：
+- ✅ 28条 Bash 安全规则已实现
+- ✅ Zsh 扩展检测已实现
+- ✅ IFS 注入检测已实现
+- ⚠️ 原生客户端认证待实现
+- ⚠️卧底模式/反蒸馏待实现
+- ⚠️ AI分类器待实现
 
 ### 5.4 工程规模对比
 
@@ -425,27 +424,28 @@ Morpheus 是一个**工程导向**的AI编程助手：
 ### 7.4 改进路线图
 
 ```
-Phase 1 (P0): 上下文管理
-├─ .morpheus.md 项目上下文文件
-├─ 多层记忆系统 (Semantic/Episodic/Working)
-└─ Reflection 机制
+Phase 1 (P0): 上下文管理 ✅
+├─ ✅ .morpheus.md 4层加载
+├─ ✅ 多层记忆系统 (Working/Episodic/Semantic)
+└─ ✅ Reflection 自省机制
 
-Phase 2 (P1): Agent增强
-├─ Subagent递归嵌套
-├─ Fork信息隔离
-└─ Background Agent
+Phase 2 (P1): Agent增强 ✅
+├─ ✅ Subagent递归嵌套 (最大3层)
+├─ ⚠️ Fork信息隔离
+└─ ✅ Background Agent (background=true)
 
-Phase 3 (P2): 安全增强
-├─ Bash安全审计增强
-├─ 原生客户端认证
-└─ 卧底模式
+Phase 3 (P2): 安全增强 ✅
+├─ ✅ 28条 Bash 安全规则
+├─ ⚠️ 原生客户端认证
+└─ ⚠️ 卧底模式
 
 Phase 4 (P3): 生态
-├─ 插件市场
-└─ VS Code扩展
+├─ ⚠️ 插件市场
+└─ ⚠️ VS Code扩展
 ```
 
 ---
 
-_文档版本: 2.0_
+_文档版本: 3.0_
+_最后更新: 2026-04-03_
 _最后更新: 2026-04-03_

@@ -1,0 +1,147 @@
+{
+  "name": "morpheus",
+  "displayName": "Morpheus AI Assistant",
+  "description": "Native IDE integration for Morpheus autonomous coding assistant",
+  "version": "0.1.0",
+  "publisher": "morpheus",
+  "engines": {
+    "vscode": "^1.75.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "assistant",
+    "coding",
+    "autonomous"
+  ],
+  "activationEvents": [
+    "onCommand:morpheus.start",
+    "onCommand:morpheus.stop",
+    "onCommand:morpheus.chat",
+    "onLanguage"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "morpheus.start",
+        "title": "Morpheus: Start Assistant",
+        "description": "Start the Morpheus AI assistant"
+      },
+      {
+        "command": "morpheus.stop",
+        "title": "Morpheus: Stop Assistant",
+        "description": "Stop the Morpheus AI assistant"
+      },
+      {
+        "command": "morpheus.chat",
+        "title": "Morpheus: Chat",
+        "description": "Open Morpheus chat panel"
+      },
+      {
+        "command": "morpheus.inline",
+        "title": "Morpheus: Inline Edit",
+        "description": "Ask Morpheus to edit selected code"
+      },
+      {
+        "command": "morpheus.explain",
+        "title": "Morpheus: Explain Code",
+        "description": "Get Morpheus to explain selected code"
+      },
+      {
+        "command": "morpheus.refactor",
+        "title": "Morpheus: Refactor Code",
+        "description": "Ask Morpheus to refactor selected code"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "morpheus.chat",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m",
+        "description": "Open Morpheus chat"
+      }
+    ],
+    "configuration": {
+      "title": "Morpheus",
+      "properties": {
+        "morpheus.endpoint": {
+          "type": "string",
+          "default": "ws://localhost:8080",
+          "description": "Morpheus backend WebSocket endpoint"
+        },
+        "morpheus.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for Morpheus backend authentication"
+        },
+        "morpheus.autostart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start Morpheus when VS Code opens"
+        },
+        "morpheus.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens for responses"
+        },
+        "morpheus.temperature": {
+          "type": "number",
+          "default": 0.4,
+          "description": "Temperature for response generation"
+        },
+        "morpheus.undercover": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable undercover mode (strips AI identity for open source contributions)"
+        },
+        "morpheus.forkIsolation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable fork isolation for subagents"
+        }
+      }
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "morpheus.chat",
+          "title": "Morpheus Chat",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "morpheus.chat": [
+        {
+          "id": "morpheus.chat.view",
+          "type": "webview",
+          "name": "Chat"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "@types/ws": "^8.5.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.45.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  }
+}
