@@ -355,7 +355,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/skill/": map[string]interface{}{
+			"/skill": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List skills",
 					"operationId": "listSkills",

@@ -239,7 +239,7 @@ morpheus serve --config path/to/config.yaml
 | GET | `/session/{id}/diff` | Get message diff |
 | POST | `/session/{id}/command` | Send command |
 | POST | `/session/{id}/shell` | Run shell command |
-| GET | `/skill/` | List skills |
+| GET | `/skill` | List skills |
 | POST | `/skill/{name}` | Load skill |
 | GET | `/models/` | List models |
 | POST | `/models/select` | Switch model |
