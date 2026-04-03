@@ -1,136 +1,5 @@
 import { TextAttributes } from "@opentui/core";
 
-// Shiki syntax highlighter singleton
-let shikiHighlighter = null;
-let shikiReady = false;
-
-const SHIKI_LANGS = [
-  "javascript",
-  "typescript",
-  "python",
-  "go",
-  "rust",
-  "java",
-  "c",
-  "cpp",
-  "bash",
-  "sh",
-  "json",
-  "yaml",
-  "toml",
-  "html",
-  "css",
-  "scss",
-  "sql",
-  "diff",
-  "markdown",
-  "text",
-  "jsx",
-  "tsx",
-  "vue",
-  "svelte",
-];
-
-async function initShikiHighlighter() {
-  try {
-    const { createHighlighter } = await import("shiki");
-    const h = await createHighlighter({
-      themes: ["github-dark"],
-      langs: SHIKI_LANGS,
-    });
-    shikiHighlighter = h;
-    shikiReady = true;
-    console.info("Shiki syntax highlighting initialized");
-    return h;
-  } catch (e) {
-    console.warn("Shiki init failed, using regex fallback:", e?.message);
-    shikiHighlighter = null;
-    shikiReady = false;
-    return null;
-  }
-}
-
-// Initialize synchronously by immediately awaiting
-initShikiHighlighter();
-
-function highlightWithShiki(code, lang) {
-  if (!shikiHighlighter || !shikiReady) return null;
-  try {
-    const tokens = shikiHighlighter.codeToTokensBase(code, {
-      lang: lang || "text",
-      theme: "github-dark",
-    });
-    if (!tokens || !tokens.length) {
-      console.error("Shiki returned empty tokens for lang:", lang);
-      return null;
-    }
-    return tokens;
-  } catch (e) {
-    console.error("Shiki error:", e?.message);
-    return null;
-  }
-}
-
-const MONOKAI = {
-  keyword: "#f92672",
-  built_in: "#66d9ef",
-  type: "#66d9ef",
-  literal: "#ae81ff",
-  number: "#ae81ff",
-  string: "#e6db74",
-  comment: "#75715e",
-  variable: "#f8f8f2",
-  function: "#a6e22e",
-  class: "#66d9ef",
-  operator: "#f92672",
-  punctuation: "#89ddff",
-  attribute: "#a6e22e",
-  constant: "#ae81ff",
-  regex: "#e6db74",
-  escape: "#ae81ff",
-};
-
-const LANGUAGE_COLORS = {
-  js: "#f7df1e",
-  javascript: "#f7df1e",
-  ts: "#3178c6",
-  typescript: "#3178c6",
-  py: "#3572A5",
-  python: "#3572A5",
-  go: "#00ADD8",
-  golang: "#00ADD8",
-  rust: "#dea584",
-  rs: "#dea584",
-  java: "#b07219",
-  bash: "#89e051",
-  sh: "#89e051",
-  shell: "#89e051",
-  zsh: "#89e051",
-  ruby: "#701516",
-  rb: "#701516",
-  php: "#4F5D95",
-  c: "#555555",
-  cpp: "#f34b7d",
-  "c++": "#f34b7d",
-  cs: "#178600",
-  "c#": "#178600",
-  swift: "#F05138",
-  kotlin: "#A97BFF",
-  scala: "#dc322f",
-  dockerfile: "#384d54",
-  yaml: "#cb171e",
-  yml: "#cb171e",
-  json: "#6ec1e4",
-  xml: "#e37933",
-  html: "#e34c26",
-  css: "#563d7c",
-  sql: "#e38c00",
-  md: "#083fa1",
-  markdown: "#083fa1",
-  diff: "#ff7b72",
-  patch: "#ff7b72",
-};
-
 const LANGUAGE_LABELS = {
   js: "JavaScript",
   javascript: "JavaScript",
@@ -172,6 +41,47 @@ const LANGUAGE_LABELS = {
   patch: "Patch",
 };
 
+const LANGUAGE_COLORS = {
+  js: "#f7df1e",
+  javascript: "#f7df1e",
+  ts: "#3178c6",
+  typescript: "#3178c6",
+  py: "#3572A5",
+  python: "#3572A5",
+  go: "#00ADD8",
+  golang: "#00ADD8",
+  rust: "#dea584",
+  rs: "#dea584",
+  java: "#b07219",
+  bash: "#89e051",
+  sh: "#89e051",
+  shell: "#89e051",
+  zsh: "#89e051",
+  ruby: "#cc342d",
+  rb: "#cc342d",
+  php: "#4F5D95",
+  c: "#555555",
+  cpp: "#6e84d4",
+  "c++": "#6e84d4",
+  cs: "#178600",
+  "c#": "#178600",
+  swift: "#F05138",
+  kotlin: "#7f8cff",
+  scala: "#dc322f",
+  dockerfile: "#384d54",
+  yaml: "#cb171e",
+  yml: "#cb171e",
+  json: "#6ec1e4",
+  xml: "#e37933",
+  html: "#e34c26",
+  css: "#563d7c",
+  sql: "#e38c00",
+  md: "#083fa1",
+  markdown: "#083fa1",
+  diff: "#6ec1e4",
+  patch: "#6ec1e4",
+};
+
 function getLangColor(lang) {
   return LANGUAGE_COLORS[lang.toLowerCase()] || "#6ec1e4";
 }
@@ -180,26 +90,44 @@ function getLangLabel(lang) {
   return LANGUAGE_LABELS[lang.toLowerCase()] || lang.toUpperCase();
 }
 
-const LANG_KEYWORDS = {
-  bash: ["if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "do", "done", "in", "function", "return", "local", "export", "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed", "awk", "find", "chmod", "chown", "sudo", "apt", "yum", "npm", "yarn", "pnpm", "git", "docker", "kubectl", "curl", "wget", "ssh", "scp", "rsync", "tar", "zip", "unzip", "source", "alias", "unalias", "exit", "export", "readonly", "declare", "typeset", "unset", "shift", "set", "trap", "wait", "exec", "eval", "true", "false"],
-  python: ["def", "class", "return", "if", "elif", "else", "for", "while", "try", "except", "finally", "with", "as", "import", "from", "raise", "pass", "break", "continue", "and", "or", "not", "in", "is", "lambda", "yield", "global", "nonlocal", "assert", "async", "await", "None", "True", "False", "self", "cls"],
-  javascript: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "default", "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "void", "this", "class", "extends", "super", "import", "export", "from", "as", "async", "await", "yield", "static", "get", "set", "of", "in", "true", "false", "null", "undefined", "NaN", "Infinity"],
-  typescript: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "default", "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "void", "this", "class", "extends", "super", "import", "export", "from", "as", "async", "await", "yield", "static", "get", "set", "of", "in", "true", "false", "null", "undefined", "NaN", "Infinity", "interface", "type", "enum", "implements", "private", "public", "protected", "readonly", "abstract", "as", "keyof", "typeof", "namespace", "module", "declare", "infer", "extends", "partial", "required", "omit", "pick", "exclude"],
-  go: ["func", "return", "if", "else", "for", "range", "switch", "case", "default", "break", "continue", "fallthrough", "goto", "defer", "go", "select", "chan", "type", "struct", "interface", "map", "const", "var", "package", "import", "nil", "true", "false", "iota", "len", "cap", "make", "new", "append", "copy", "delete", "close", "panic", "recover", "print", "println", "error", "string", "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "complex64", "complex128", "bool", "byte", "rune", "any"],
-  rust: ["fn", "let", "mut", "const", "static", "if", "else", "match", "for", "while", "loop", "break", "continue", "return", "struct", "enum", "impl", "trait", "type", "where", "pub", "mod", "use", "crate", "self", "super", "as", "ref", "move", "async", "await", "dyn", "unsafe", "extern", "true", "false", "Some", "None", "Ok", "Err", "impl", "trait", "struct", "enum", "type", "mod", "pub", "crate", "self", "super"],
-  java: ["abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null"],
-  c: ["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "_Bool", "_Complex", "_Imaginary", "NULL", "true", "false", "printf", "scanf", "malloc", "free", "sizeof"],
-  cpp: ["alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char16_t", "char32_t", "class", "compl", "const", "constexpr", "const_cast", "continue", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register", "reinterpret_cast", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq", "std", "string", "vector", "map", "set", "cout", "cin", "endl", "printf", "scanf", "malloc", "free"],
-  sql: ["SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "BETWEEN", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "ON", "AS", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "INDEX", "VIEW", "DROP", "ALTER", "ADD", "COLUMN", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "UNIQUE", "CHECK", "DEFAULT", "CONSTRAINT", "CASCADE", "DISTINCT", "ALL", "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION", "INTERSECT", "EXCEPT", "ASC", "DESC", "TRUE", "FALSE", "INTEGER", "INT", "BIGINT", "SMALLINT", "REAL", "DOUBLE", "DECIMAL", "NUMERIC", "CHAR", "VARCHAR", "TEXT", "DATE", "TIME", "TIMESTAMP", "BLOB"],
-  json: ["true", "false", "null"],
-  yaml: ["true", "false", "null", "yes", "no", "on", "off", "~"],
-  dockerfile: ["FROM", "RUN", "CMD", "LABEL", "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL", "HEALTHCHECK", "MAINTAINER", "SHELL", "COMMENT", "ENV", "EXPOSE", "ARG", "LABEL"],
-  markdown: [],
-  html: ["html", "head", "body", "div", "span", "p", "a", "img", "ul", "ol", "li", "table", "tr", "td", "th", "form", "input", "button", "select", "option", "textarea", "h1", "h2", "h3", "h4", "h5", "h6", "header", "footer", "nav", "section", "article", "aside", "main", "script", "style", "link", "meta", "title", "class", "id", "src", "href", "alt", "type", "name", "value"],
-  css: ["important", "inherit", "initial", "unset", "none", "auto", "normal", "bold", "italic", "underline", "block", "inline", "flex", "grid", "relative", "absolute", "fixed", "sticky", "static", "hidden", "visible", "scroll", "transparent", "solid", "dashed", "dotted", "center", "left", "right", "top", "bottom", "wrap", "nowrap", "color", "background", "margin", "padding", "border", "width", "height", "display", "position", "font", "text", "flex", "grid"],
+const COLORS = {
+  keyword: "#4fc1ff",
+  keyword2: "#4fc1ff",
+  string: "#98c379",
+  number: "#4fc1ff",
+  comment: "#5c6370",
+  function: "#61afef",
+  variable: "#abb2bf",
+  type: "#61afef",
+  operator: "#56b6c2",
+  punctuation: "#abb2bf",
+  attribute: "#4fc1ff",
+  builtin: "#61afef",
+  constant: "#4fc1ff",
+  selector: "#4fc1ff",
+  property: "#abb2bf",
+  tag: "#4fc1ff",
 };
 
-const LANG_BUILTINS = {
+const KEYWORDS = {
+  bash: ["if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "do", "done", "in", "function", "return", "local", "export", "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed", "awk", "find", "chmod", "chown", "sudo", "apt", "yum", "npm", "yarn", "pnpm", "git", "docker", "kubectl", "curl", "wget", "ssh", "scp", "rsync", "tar", "zip", "unzip", "source", "alias", "unalias", "exit", "readonly", "declare", "typeset", "unset", "shift", "set", "trap", "wait", "exec", "eval", "true", "false"],
+  python: ["def", "class", "return", "if", "elif", "else", "for", "while", "try", "except", "finally", "with", "as", "import", "from", "raise", "pass", "break", "continue", "and", "or", "not", "in", "is", "lambda", "yield", "global", "nonlocal", "assert", "async", "await", "None", "True", "False", "self", "cls"],
+  javascript: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "default", "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "void", "this", "class", "extends", "super", "import", "export", "from", "as", "async", "await", "yield", "static", "get", "set", "of", "in", "true", "false", "null", "undefined", "NaN", "Infinity"],
+  typescript: ["const", "let", "var", "function", "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue", "default", "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "void", "this", "class", "extends", "super", "import", "export", "from", "as", "async", "await", "yield", "static", "get", "set", "of", "in", "true", "false", "null", "undefined", "interface", "type", "enum", "implements", "private", "public", "protected", "readonly", "abstract", "keyof", "namespace", "module", "declare", "infer", "partial", "required", "omit", "pick", "exclude"],
+  go: ["func", "return", "if", "else", "for", "range", "switch", "case", "default", "break", "continue", "fallthrough", "goto", "defer", "go", "select", "chan", "type", "struct", "interface", "map", "const", "var", "package", "import", "nil", "true", "false", "iota", "len", "cap", "make", "new", "append", "copy", "delete", "close", "panic", "recover", "error", "string", "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "complex64", "complex128", "bool", "byte", "rune", "any"],
+  rust: ["fn", "let", "mut", "const", "static", "if", "else", "match", "for", "while", "loop", "break", "continue", "return", "struct", "enum", "impl", "trait", "type", "where", "pub", "mod", "use", "crate", "self", "super", "as", "ref", "move", "async", "await", "dyn", "unsafe", "extern", "true", "false", "Some", "None", "Ok", "Err", "Box", "Rc", "Arc", "Cell", "RefCell", "Mutex"],
+  java: ["abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null"],
+  c: ["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "NULL", "printf", "scanf", "malloc", "free"],
+  cpp: ["alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char16_t", "char32_t", "class", "compl", "const", "constexpr", "const_cast", "continue", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register", "reinterpret_cast", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq", "std", "string", "vector", "map", "set", "cout", "cin", "endl", "malloc", "free"],
+  sql: ["SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "BETWEEN", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "ON", "AS", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "INDEX", "VIEW", "DROP", "ALTER", "ADD", "COLUMN", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "UNIQUE", "CHECK", "DEFAULT", "CONSTRAINT", "CASCADE", "DISTINCT", "ALL", "EXISTS", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION", "INTERSECT", "EXCEPT", "ASC", "DESC", "INTEGER", "INT", "BIGINT", "SMALLINT", "REAL", "DOUBLE", "DECIMAL", "NUMERIC", "CHAR", "VARCHAR", "TEXT", "DATE", "TIME", "TIMESTAMP", "BLOB"],
+  json: ["true", "false", "null"],
+  yaml: ["true", "false", "null", "yes", "no", "on", "off", "~"],
+  dockerfile: ["FROM", "RUN", "CMD", "LABEL", "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL", "HEALTHCHECK", "MAINTAINER", "SHELL"],
+  html: ["html", "head", "body", "div", "span", "p", "a", "img", "ul", "ol", "li", "table", "tr", "td", "th", "form", "input", "button", "select", "option", "textarea", "h1", "h2", "h3", "h4", "h5", "h6", "header", "footer", "nav", "section", "article", "aside", "main", "script", "style", "link", "meta", "title"],
+  css: ["important", "inherit", "initial", "unset", "none", "auto", "normal", "bold", "italic", "underline", "block", "inline", "flex", "grid", "relative", "absolute", "fixed", "sticky", "static", "hidden", "visible", "scroll", "transparent", "solid", "dashed", "dotted", "center", "left", "right", "top", "bottom", "wrap", "nowrap", "color", "background", "margin", "padding", "border", "width", "height", "display", "position", "font", "text"],
+};
+
+const BUILTINS = {
   python: ["print", "len", "range", "str", "int", "float", "list", "dict", "set", "tuple", "bool", "type", "isinstance", "hasattr", "getattr", "setattr", "open", "input", "map", "filter", "zip", "enumerate", "sorted", "reversed", "min", "max", "sum", "abs", "round", "pow", "divmod", "hex", "oct", "bin", "ord", "chr", "repr", "format", "slice", "super", "self", "cls", "object", "Exception"],
   javascript: ["console", "window", "document", "Math", "JSON", "Array", "Object", "String", "Number", "Boolean", "Function", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Promise", "Proxy", "Reflect", "Date", "RegExp", "Error", "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "decodeURI", "setTimeout", "setInterval", "clearTimeout", "clearInterval", "fetch", "require", "module", "exports", "process", "global", "Buffer"],
   typescript: ["console", "window", "document", "Math", "JSON", "Array", "Object", "String", "Number", "Boolean", "Function", "Symbol", "Map", "Set", "Promise", "Date", "RegExp", "Error", "parseInt", "parseFloat", "fetch", "require", "module", "exports", "Partial", "Required", "Readonly", "Record", "Pick", "Omit", "Exclude", "Extract", "NonNullable", "ReturnType", "InstanceType", "Parameters"],
@@ -208,12 +136,12 @@ const LANG_BUILTINS = {
   java: ["System", "out", "println", "print", "String", "Integer", "Double", "Boolean", "Long", "Float", "Short", "Byte", "Character", "Object", "Class", "Math", "Thread", "Runnable", "Exception", "Error", "Throwable", "List", "ArrayList", "Map", "HashMap", "Set", "HashSet", "Queue", "Deque", "ArrayDeque", "Collections", "Arrays", "StringBuilder"],
 };
 
-const LANG_TYPES = {
+const TYPES = {
   python: ["int", "str", "float", "bool", "list", "dict", "set", "tuple", "bytes", "object", "type", "Exception", "TypeError", "ValueError", "KeyError", "IndexError", "AttributeError"],
   javascript: ["Array", "Object", "String", "Number", "Boolean", "Function", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Promise", "Proxy", "Reflect", "Date", "RegExp", "Error", "ArrayBuffer", "DataView", "Int8Array", "Uint8Array", "Float32Array", "Float64Array"],
   typescript: ["Array", "Object", "String", "Number", "Boolean", "Function", "Symbol", "Map", "Set", "Promise", "Date", "RegExp", "Error", "Partial", "Required", "Readonly", "Record", "Pick", "Omit", "Exclude", "Extract", "any", "unknown", "never", "void", "null", "undefined", "string", "number", "boolean", "symbol", "bigint"],
   go: ["int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "complex64", "complex128", "bool", "byte", "rune", "string", "error", "any", "interface", "struct", "map", "slice", "chan"],
-  rust: ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64", "bool", "char", "str", "String", "Vec", "Box", "Option", "Result", "HashMap", "HashSet", "String", "Vec"],
+  rust: ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64", "bool", "char", "str", "String", "Vec", "Box", "Option", "Result", "HashMap", "HashSet"],
   java: ["int", "char", "float", "double", "void", "long", "short", "byte", "boolean", "Integer", "Long", "Float", "Double", "Short", "Byte", "Character", "Boolean", "String", "Object", "Class", "List", "ArrayList", "Map", "HashMap", "Set", "HashSet"],
   c: ["int", "char", "float", "double", "void", "long", "short", "unsigned", "signed", "size_t", "ptrdiff_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "bool", "FILE", "DIR", "NULL"],
 };
@@ -222,179 +150,332 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function createLanguageHighlighter(lang) {
-  const keywords = LANG_KEYWORDS[lang] || [];
-  const builtins = LANG_BUILTINS[lang] || [];
-  const types = LANG_TYPES[lang] || [];
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
-  const keywordSet = new Set(keywords.map(k => k.toLowerCase()));
-  const builtinSet = new Set(builtins.map(b => b.toLowerCase()));
-  const typeSet = new Set(types.map(t => t.toLowerCase()));
+function highlightCode(code, lang) {
+  const keywords = KEYWORDS[lang] || [];
+  const builtins = BUILTINS[lang] || [];
+  const types = TYPES[lang] || [];
 
-  const patterns = [];
+  const keywordSet = new Set(keywords);
+  const builtinSet = new Set(builtins);
+  const typeSet = new Set(types);
 
-  if (lang === "bash" || lang === "shell" || lang === "sh" || lang === "zsh") {
-    patterns.push({ type: "comment", regex: /#.*$/gm });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "variable", regex: /\$[a-zA-Z_][a-zA-Z0-9_]*|\$\{[^}]+\}/g });
-    patterns.push({ type: "function", regex: /\b[a-zA-Z_][a-zA-Z0-9]*(?=\s*\()/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.map(escapeRegex).join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b[0-9]+\b/g });
-  } else if (lang === "python") {
-    patterns.push({ type: "comment", regex: /#.*$/gm });
-    patterns.push({ type: "string", regex: /f?"""[\s\S]*?"""|'''[\s\S]*?'''|@?r?"(?:[^"\\]|\\.)*"|@?r?'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "string", regex: /\b[f][Rr]?(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"[^"]*"|'[^']*')/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "builtin", regex: new RegExp(`\\b(?:${builtins.join("|")})\\b`, "g") });
-    patterns.push({ type: "type", regex: new RegExp(`\\b(?:${types.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b0[xX][0-9a-fA-F]+\b|\b0[oO][0-7]+\b|\b0[bB][01]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?\b/g });
-    patterns.push({ type: "decorator", regex: /@\w+/g });
-    patterns.push({ type: "function", regex: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/g });
-  } else if (lang === "javascript" || lang === "js" || lang === "typescript" || lang === "ts") {
-    patterns.push({ type: "comment", regex: /\/\/.*$|\/\*[\s\S]*?\*\//gm });
-    patterns.push({ type: "string", regex: /`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "builtin", regex: new RegExp(`\\b(?:${builtins.join("|")})\\b`, "g") });
-    patterns.push({ type: "type", regex: new RegExp(`\\b(?:${types.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b0[xX][0-9a-fA-F]+\b|\b0[oO][0-7]+\b|\b0[bB][01]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?\b/g });
-    patterns.push({ type: "function", regex: /\b[A-Z][a-zA-Z0-9]*(?=\s*\.)|\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/g });
-    patterns.push({ type: "class", regex: /\b[A-Z][a-zA-Z0-9]+\b/g });
-  } else if (lang === "go") {
-    patterns.push({ type: "comment", regex: /\/\/.*$|\/\*[\s\S]*?\*\//gm });
-    patterns.push({ type: "string", regex: /`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "builtin", regex: new RegExp(`\\b(?:${builtins.join("|")})\\b`, "g") });
-    patterns.push({ type: "type", regex: new RegExp(`\\b(?:${types.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b0[xX][0-9a-fA-F]+\b|\b0[oO][0-7]+\b|\b0[bB][01]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?\b|\b\d+i\b/g });
-    patterns.push({ type: "function", regex: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/g });
-  } else if (lang === "rust") {
-    patterns.push({ type: "comment", regex: /\/\/.*$|\/\*[\s\S]*?\*\//gm });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "builtin", regex: new RegExp(`\\b(?:${builtins.join("|")})\\b`, "g") });
-    patterns.push({ type: "type", regex: new RegExp(`\\b(?:${types.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b0[xX][0-9a-fA-F_]+\b|\b0[oO][0-7_]+\b|\b0[bB][01_]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?(?:_?[fiu](?:8|16|32|64|size))?\b|\b\d+_?\d*:.*?(?=:)\b/g });
-    patterns.push({ type: "function", regex: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*[!(<])?/g });
-    patterns.push({ type: "macro", regex: /\b[a-zA-Z_][a-zA-Z0-9_]*!/g });
-  } else if (lang === "java" || lang === "c" || lang === "cpp") {
-    patterns.push({ type: "comment", regex: /\/\/.*$|\/\*[\s\S]*?\*\//gm });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "builtin", regex: new RegExp(`\\b(?:${builtins.join("|")})\\b`, "g") });
-    patterns.push({ type: "type", regex: new RegExp(`\\b(?:${types.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b0[xX][0-9a-fA-F]+\b|\b0[oO][0-7]+\b|\b0[bB][01]+\b|\b\d+\.?\d*(?:[eE][+-]?\d+)?[fFdDlL]?\b/g });
-    patterns.push({ type: "function", regex: /\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()/g });
-    patterns.push({ type: "class", regex: /\b[A-Z][a-zA-Z0-9_]+\b/g });
-  } else if (lang === "sql") {
-    patterns.push({ type: "comment", regex: /--.*$|\/\*[\s\S]*?\*\//gm });
-    patterns.push({ type: "string", regex: /'(?:[^']|'')*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b\d+\.?\d*\b/g });
-  } else if (lang === "json") {
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"/g });
-    patterns.push({ type: "keyword", regex: /\b(?:true|false|null)\b/g });
-    patterns.push({ type: "number", regex: /-?\b\d+\.?\d*(?:[eE][+-]?\d+)?\b/g });
-  } else if (lang === "yaml") {
-    patterns.push({ type: "comment", regex: /#.*$/gm });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b\d+\.?\d*\b/g });
-    patterns.push({ type: "attr", regex: /^[\w-]+(?=:)/gm });
-  } else if (lang === "html" || lang === "xml") {
-    patterns.push({ type: "comment", regex: /<!--[\s\S]*?-->/g });
-    patterns.push({ type: "tag", regex: /<\/?[\w-]+/g });
-    patterns.push({ type: "attr", regex: /\b[\w-]+(?==)/g });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-  } else if (lang === "css") {
-    patterns.push({ type: "comment", regex: /\/\*[\s\S]*?\*\//g });
-    patterns.push({ type: "selector", regex: /[.#]?[a-zA-Z_-][a-zA-Z0-9_-]*(?=\s*\{)/g });
-    patterns.push({ type: "property", regex: /[a-zA-Z-]+(?=\s*:)/g });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b\d+\.?\d*(px|em|rem|%|vh|vw|pt|cm|mm|in)?\b/g });
-  } else if (lang === "dockerfile") {
-    patterns.push({ type: "comment", regex: /#.*$/gm });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "variable", regex: /\$\{?[a-zA-Z_][a-zA-Z0-9_]*\}?/g });
-    patterns.push({ type: "number", regex: /\b\d+\b/g });
-  } else {
-    patterns.push({ type: "comment", regex: /\/\/.*$|\/\*[\s\S]*?\/|#.*$/gm });
-    patterns.push({ type: "string", regex: /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g });
-    patterns.push({ type: "keyword", regex: new RegExp(`\\b(?:${keywords.join("|")})\\b`, "g") });
-    patterns.push({ type: "number", regex: /\b\d+\.?\d*\b/g });
-  }
+  const lines = code.split("\n");
+  const result = [];
 
-  return function highlight(code) {
+  for (const line of lines) {
     const tokens = [];
-    let remaining = code;
-    let position = 0;
+    let remaining = line;
+    let pos = 0;
 
-    while (remaining.length > 0) {
-      let earliest = null;
-      let earliestType = null;
-      let earliestLength = 0;
+    while (pos < remaining.length) {
+      let matched = false;
 
-      for (const pattern of patterns) {
-        pattern.regex.lastIndex = 0;
-        const match = pattern.regex.exec(remaining);
-        if (match && match.index === 0) {
-          if (!earliest || match[0].length > earliestLength) {
-            earliest = match[0];
-            earliestType = pattern.type;
-            earliestLength = match[0].length;
+      if (remaining.slice(pos).startsWith("//")) {
+        tokens.push({ type: "comment", text: remaining.slice(pos) });
+        break;
+      }
+
+      if (remaining.slice(pos).startsWith("/*")) {
+        const end = remaining.indexOf("*/", pos + 2);
+        const endPos = end >= 0 ? end + 2 : remaining.length;
+        tokens.push({ type: "comment", text: remaining.slice(pos, endPos) });
+        pos = endPos;
+        matched = true;
+        continue;
+      }
+
+      if (remaining.slice(pos).startsWith("#") && (lang === "python" || lang === "bash" || lang === "sh" || lang === "shell" || lang === "zsh" || lang === "yaml" || lang === "dockerfile")) {
+        tokens.push({ type: "comment", text: remaining.slice(pos) });
+        break;
+      }
+
+      if (remaining[pos] === '"' || remaining[pos] === "'" || remaining[pos] === "`") {
+        const quote = remaining[pos];
+        let end = pos + 1;
+        while (end < remaining.length) {
+          if (remaining[end] === "\\" && end + 1 < remaining.length) {
+            end += 2;
+            continue;
           }
+          if (remaining[end] === quote) {
+            end++;
+            break;
+          }
+          end++;
+        }
+        tokens.push({ type: "string", text: remaining.slice(pos, end) });
+        pos = end;
+        matched = true;
+        continue;
+      }
+
+      if (/\d/.test(remaining[pos])) {
+        let end = pos;
+        while (end < remaining.length && /[\d.xXoObBeE_]/.test(remaining[end])) {
+          end++;
+        }
+        if (end > pos) {
+          tokens.push({ type: "number", text: remaining.slice(pos, end) });
+          pos = end;
+          matched = true;
+          continue;
         }
       }
 
-      if (earliest && earliestType) {
-        if (earliestLength > 0) {
-          tokens.push({ type: earliestType, value: earliest });
-          remaining = remaining.slice(earliestLength);
-          position += earliestLength;
+      if (remaining.slice(pos).startsWith("<!--") && (lang === "html" || lang === "xml")) {
+        const end = remaining.indexOf("-->", pos + 4);
+        const endPos = end >= 0 ? end + 3 : remaining.length;
+        tokens.push({ type: "comment", text: remaining.slice(pos, endPos) });
+        pos = endPos;
+        matched = true;
+        continue;
+      }
+
+      if ((lang === "html" || lang === "xml" || lang === "css") && remaining[pos] === "<") {
+        let end = pos + 1;
+        while (end < remaining.length && remaining[end] !== ">") {
+          if (remaining[end] === '"' || remaining[end] === "'") {
+            const quote = remaining[end];
+            end++;
+            while (end < remaining.length && remaining[end] !== quote) {
+              if (remaining[end] === "\\") end++;
+              end++;
+            }
+            if (end < remaining.length) end++;
+          } else {
+            end++;
+          }
         }
+        if (end < remaining.length) end++;
+        tokens.push({ type: "tag", text: remaining.slice(pos, end) });
+        pos = end;
+        matched = true;
+        continue;
+      }
+
+      if (lang === "css" || lang === "html") {
+        const selectorMatch = remaining.slice(pos).match(/^[.#]?[a-zA-Z_-][a-zA-Z0-9_-]*/);
+        if (selectorMatch && remaining[pos] === ".") {
+          tokens.push({ type: "selector", text: selectorMatch[0] });
+          pos += selectorMatch[0].length;
+          matched = true;
+          continue;
+        }
+        if (selectorMatch && remaining[pos] === "#") {
+          tokens.push({ type: "selector", text: "#" + selectorMatch[0].slice(1) });
+          pos += selectorMatch[0].length;
+          matched = true;
+          continue;
+        }
+      }
+
+      const wordMatch = remaining.slice(pos).match(/^[a-zA-Z_][a-zA-Z0-9_]*/);
+      if (wordMatch) {
+        const word = wordMatch[0];
+        if (keywordSet.has(word)) {
+          tokens.push({ type: "keyword", text: word });
+        } else if (builtinSet.has(word)) {
+          tokens.push({ type: "builtin", text: word });
+        } else if (typeSet.has(word)) {
+          tokens.push({ type: "type", text: word });
+        } else if (remaining.slice(pos + word.length).match(/^\s*\(/)) {
+          tokens.push({ type: "function", text: word });
+        } else if (/^[A-Z][a-zA-Z0-9]*$/.test(word)) {
+          tokens.push({ type: "type", text: word });
+        } else {
+          tokens.push({ type: "variable", text: word });
+        }
+        pos += word.length;
+        matched = true;
+        continue;
+      }
+
+      if (/[\+\-\*\/\=\%\&\|\^\!\~\<\>]/.test(remaining[pos])) {
+        let end = pos + 1;
+        while (end < remaining.length && /[\+\-\*\/\=\%\&\|\^\!\~\<\>]/.test(remaining[end])) {
+          end++;
+        }
+        tokens.push({ type: "operator", text: remaining.slice(pos, end) });
+        pos = end;
+        matched = true;
+        continue;
+      }
+
+      if (/[\{\}\[\]\(\)\,\.\;]/.test(remaining[pos])) {
+        tokens.push({ type: "punctuation", text: remaining[pos] });
+        pos++;
+        matched = true;
+        continue;
+      }
+
+      if (/\s/.test(remaining[pos])) {
+        let end = pos + 1;
+        while (end < remaining.length && /\s/.test(remaining[end])) {
+          end++;
+        }
+        tokens.push({ type: "whitespace", text: remaining.slice(pos, end) });
+        pos = end;
+        matched = true;
+        continue;
+      }
+
+      tokens.push({ type: "text", text: remaining[pos] });
+      pos++;
+    }
+
+    result.push(tokens);
+  }
+
+  return result;
+}
+
+function tokenToFg(type) {
+  return COLORS[type] || "#abb2bf";
+}
+
+function renderCodeBlock(out, lang, lines, colors) {
+  const langColor = colors.accent || colors.code;
+  const langLabel = getLangLabel(lang);
+  const maxLen = Math.max(40, ...lines.map(l => l.length));
+  const contentWidth = Math.min(maxLen + 2, 80);
+  const topLine = `  ${langLabel} ` + "─".repeat(Math.max(0, contentWidth - langLabel.length - 2));
+  const bottomLine = "  " + "─".repeat(contentWidth);
+
+  out.push({ text: topLine, fg: langColor });
+
+  const lowerLang = lang.toLowerCase();
+  if (lowerLang === "diff" || lowerLang === "patch") {
+    for (const line of lines) {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("+")) {
+        out.push({ text: "  " + line, fg: colors.success || "#98c379" });
+      } else if (trimmed.startsWith("-")) {
+        out.push({ text: "  " + line, fg: colors.error || "#e06c75" });
+      } else if (trimmed.startsWith("@@")) {
+        out.push({ text: "  " + line, fg: COLORS.comment });
+      } else if (trimmed.startsWith("\\")) {
+        out.push({ text: "  " + line, fg: COLORS.string });
       } else {
-        tokens.push({ type: "text", value: remaining[0] });
-        remaining = remaining.slice(1);
-        position++;
+        out.push({ text: "  " + line, fg: colors.muted || "#5c6370" });
+      }
+    }
+  } else {
+    const code = lines.join("\n");
+    const highlighted = highlightCode(code, lowerLang);
+
+    for (const lineTokens of highlighted) {
+      if (lineTokens.length === 0) {
+        out.push({ text: "  ", fg: colors.code });
+        continue;
+      }
+      const nonWhitespaceTokens = lineTokens.filter(t => t.type !== "whitespace");
+      const isOnlyKeywords = nonWhitespaceTokens.length > 0 && nonWhitespaceTokens.every(t => t.type === "keyword");
+
+      let lineText = "";
+      for (const token of lineTokens) {
+        lineText += token.text;
+      }
+      const lineFg = isOnlyKeywords ? COLORS.keyword : colors.code;
+      out.push({ text: "  " + lineText, fg: lineFg });
+    }
+  }
+
+  out.push({ text: bottomLine, fg: langColor });
+}
+
+function renderInlineCode(text, colors) {
+  return { text, fg: colors.accent || "#4fc1ff" };
+}
+
+function renderStrong(text, colors) {
+  return { text, fg: colors.text, attributes: TextAttributes.BOLD };
+}
+
+function renderEmphasis(text, colors) {
+  return { text, fg: colors.muted || "#5c6370", attributes: TextAttributes.ITALIC };
+}
+
+function parseInlineTokens(line, colors) {
+  const tokens = [];
+  let remaining = line;
+  let pos = 0;
+
+  while (pos < remaining.length) {
+    if (remaining[pos] === "`") {
+      let end = pos + 1;
+      while (end < remaining.length && remaining[end] !== "`") {
+        if (remaining[end] === "\\" && end + 1 < remaining.length) end++;
+        end++;
+      }
+      if (end < remaining.length) end++;
+      const code = remaining.slice(pos + 1, end - 1);
+      tokens.push({ type: "code", text: code });
+      pos = end;
+      continue;
+    }
+
+    if (remaining.slice(pos, pos + 2) === "**") {
+      let end = pos + 2;
+      while (end < remaining.length - 1 && remaining.slice(end, end + 2) !== "**") {
+        end++;
+      }
+      if (remaining.slice(end, end + 2) === "**") {
+        const strong = remaining.slice(pos + 2, end);
+        tokens.push({ type: "strong", text: strong });
+        pos = end + 2;
+        continue;
       }
     }
 
-    return tokens;
-  };
-}
+    if (remaining[pos] === "*" || remaining[pos] === "_") {
+      const marker = remaining[pos];
+      let end = pos + 1;
+      while (end < remaining.length && remaining[end] !== marker) {
+        if (remaining[end] === "\\" && end + 1 < remaining.length) end++;
+        end++;
+      }
+      if (end < remaining.length && remaining[end] === marker && end > pos + 1) {
+        const emph = remaining.slice(pos + 1, end);
+        tokens.push({ type: "emphasis", text: emph });
+        pos = end + 1;
+        continue;
+      }
+    }
 
-function tokenToFg(token) {
-  switch (token.type) {
-    case "keyword": return MONOKAI.keyword;
-    case "built_in": return MONOKAI.built_in;
-    case "type": return MONOKAI.type;
-    case "literal": return MONOKAI.literal;
-    case "number": return MONOKAI.number;
-    case "string": return MONOKAI.string;
-    case "comment": return MONOKAI.comment;
-    case "variable": return MONOKAI.variable;
-    case "function": return MONOKAI.function;
-    case "class": return MONOKAI.class;
-    case "operator": return MONOKAI.operator;
-    case "punctuation": return MONOKAI.punctuation;
-    case "attribute": return MONOKAI.attribute;
-    case "constant": return MONOKAI.constant;
-    case "regex": return MONOKAI.regex;
-    case "escape": return MONOKAI.escape;
-    case "decorator": return MONOKAI.function;
-    case "macro": return MONOKAI.function;
-    case "selector": return MONOKAI.keyword;
-    case "property": return MONOKAI.attribute;
-    case "tag": return MONOKAI.keyword;
-    default: return "#f8f8f2";
+    let end = pos + 1;
+    while (end < remaining.length && !"`*_".includes(remaining[end])) {
+      end++;
+    }
+    tokens.push({ type: "text", text: remaining.slice(pos, end) });
+    pos = end;
   }
+
+  return tokens;
 }
 
-function highlightCodeFallback(code, lang) {
-  const highlighter = createLanguageHighlighter(lang);
-  const tokens = highlighter(code);
-  return tokens.map(t => ({ text: t.value, fg: tokenToFg(t) }));
+function renderInline(line, colors) {
+  const tokens = parseInlineTokens(line, colors);
+  const out = [];
+  for (const token of tokens) {
+    switch (token.type) {
+      case "code":
+        out.push(renderInlineCode(token.text, colors));
+        break;
+      case "strong":
+        out.push(renderStrong(token.text, colors));
+        break;
+      case "emphasis":
+        out.push(renderEmphasis(token.text, colors));
+        break;
+      default:
+        out.push({ text: token.text, fg: colors.text });
+    }
+  }
+  return out;
 }
 
 function normalizeThinkingLine(trimmed) {
@@ -427,7 +508,7 @@ function renderTable(table, colors) {
   const out = [];
   const totalWidth = table.colWidths.reduce((a, b) => a + b, 0) + table.colCount * 3 + 1;
   const divider = "─".repeat(totalWidth - 2);
-  const padRow = (cells, isHeader) => {
+  const padRow = (cells) => {
     const padded = cells.map((cell, i) => {
       const width = table.colWidths[i] ?? cell.length;
       return cell.padEnd(width);
@@ -435,77 +516,15 @@ function renderTable(table, colors) {
     return "│ " + padded.join(" │ ") + " │";
   };
   out.push({ text: "┌" + divider + "┐", fg: colors.accent ?? colors.muted });
-  const header = table.rows[0];
-  out.push({ text: padRow(header, true), fg: colors.accent ?? colors.text, attributes: TextAttributes.BOLD });
+  out.push({ text: padRow(table.rows[0]), fg: colors.accent ?? colors.text, attributes: TextAttributes.BOLD });
   if (table.rows.length > 1) {
     out.push({ text: "├" + divider + "┤", fg: colors.accent ?? colors.muted });
   }
   for (let i = 1; i < table.rows.length; i++) {
-    out.push({ text: padRow(table.rows[i], false), fg: colors.text });
+    out.push({ text: padRow(table.rows[i]), fg: colors.text });
   }
   out.push({ text: "└" + divider + "┘", fg: colors.accent ?? colors.muted });
   return out;
-}
-
-function renderCodeBlock(out, lang, lines, colors) {
-  const langColor = colors.accent || colors.code;
-  const langLabel = getLangLabel(lang);
-  const maxLen = Math.max(40, ...lines.map(l => l.length));
-  const contentWidth = Math.min(maxLen + 2, 80);
-  const topLine = `  ${langLabel} ` + "─".repeat(Math.max(0, contentWidth - langLabel.length - 2));
-  const bottomLine = "  " + "─".repeat(contentWidth);
-
-  out.push({ text: topLine, fg: langColor });
-
-  const lowerLang = lang.toLowerCase();
-  if (lowerLang === "diff" || lowerLang === "patch") {
-    for (const line of lines) {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith("+")) {
-        out.push({ text: `  ${line}`, fg: colors.success || "#98fb98" });
-      } else if (trimmed.startsWith("-")) {
-        out.push({ text: `  ${line}`, fg: colors.error || "#ff7b72" });
-      } else if (trimmed.startsWith("@@")) {
-        out.push({ text: `  ${line}`, fg: MONOKAI.comment });
-      } else {
-        out.push({ text: `  ${line}`, fg: colors.muted });
-      }
-    }
-  } else {
-    const code = lines.join("\n");
-    const shikiTokens = highlightWithShiki(code, lang);
-
-    if (shikiTokens) {
-      for (const lineTokens of shikiTokens) {
-        if (lineTokens.length === 0) {
-          out.push({ text: "  ", fg: colors.code });
-          continue;
-        }
-        let lineText = "";
-        let lineFg = colors.code;
-        for (const token of lineTokens) {
-          lineText += token.content;
-          if (lineFg === colors.code) {
-            const c = token.color;
-            if (typeof c === "string" && c) {
-              lineFg = c;
-            } else if (c && typeof c === "object" && c.dark) {
-              lineFg = c.dark;
-            }
-          }
-        }
-        out.push({ text: "  " + lineText, fg: lineFg });
-      }
-    } else {
-      // Fall back to no highlighting (line-by-line, single color)
-      // Regex highlighter doesn't preserve line boundaries, so we can't use it
-      for (const line of lines) {
-        out.push({ text: "  " + line, fg: colors.code });
-      }
-    }
-  }
-
-  out.push({ text: bottomLine, fg: langColor });
 }
 
 export function renderMarkdownLines(content, colors) {
@@ -524,6 +543,13 @@ export function renderMarkdownLines(content, colors) {
     }
   };
 
+  const flushCode = () => {
+    if (codeBuffer.length > 0) {
+      renderCodeBlock(out, codeLang, codeBuffer, colors);
+      codeBuffer = [];
+    }
+  };
+
   for (const raw of lines) {
     const line = raw ?? "";
     const trimmed = line.trim();
@@ -531,10 +557,9 @@ export function renderMarkdownLines(content, colors) {
     if (trimmed.startsWith("```")) {
       flushTable();
       if (inCode) {
-        renderCodeBlock(out, codeLang, codeBuffer, colors);
+        flushCode();
         inCode = false;
         codeLang = "";
-        codeBuffer = [];
       } else {
         inCode = true;
         codeLang = trimmed.slice(3).trim().toLowerCase();
@@ -564,7 +589,7 @@ export function renderMarkdownLines(content, colors) {
     if (summaryLine) {
       flushTable();
       const rest = summaryLine.slice("Summary:".length).trimStart();
-      out.push({ text: "Summary:", fg: colors.accent ?? colors.code, attributes: TextAttributes.BOLD });
+      out.push({ text: "Summary:", fg: colors.summary ?? colors.accent ?? colors.code, attributes: TextAttributes.BOLD });
       if (rest) {
         out.push({ text: " " + rest, fg: colors.text });
       }
@@ -591,6 +616,10 @@ export function renderMarkdownLines(content, colors) {
       continue;
     }
 
+    if (/^---+$/.test(trimmed)) {
+      continue;
+    }
+
     const checkbox = /^[-*]\s+\[([ xX~\-])\]\s+(.*)$/.exec(trimmed);
     if (checkbox) {
       flushTable();
@@ -609,14 +638,21 @@ export function renderMarkdownLines(content, colors) {
       continue;
     }
 
-    if (/^---+$/.test(trimmed)) {
-      continue;
-    }
-
     const list = /^[-*]\s+(.*)$/.exec(trimmed);
     if (list) {
       flushTable();
-      out.push({ text: `- ${list[1]}`, fg: colors.text });
+      const parts = renderInline(list[1], colors);
+      for (const part of parts) {
+        if (part.text === "- ") continue;
+      }
+      out.push({ text: `  • ${list[1]}`, fg: colors.text });
+      continue;
+    }
+
+    const numberedList = /^\d+\.\s+(.*)$/.exec(trimmed);
+    if (numberedList) {
+      flushTable();
+      out.push({ text: `    ${numberedList[1]}`, fg: colors.text });
       continue;
     }
 
@@ -626,22 +662,29 @@ export function renderMarkdownLines(content, colors) {
       const level = heading[1].length;
       const text = heading[2] || "";
       const lowered = text.toLowerCase().trim();
-      const fg = lowered === "error" && colors.error
-        ? colors.error
-        : lowered === "output"
-          ? colors.accent ?? colors.code
-          : colors.text;
-      out.push({
-        text,
-        fg,
-        attributes: level <= 2 ? TextAttributes.BOLD : undefined,
-      });
+
+      let fg;
+      let attributes = level <= 2 ? TextAttributes.BOLD : undefined;
+
+      if (lowered === "error" && colors.error) {
+        fg = colors.error;
+      } else if (lowered === "output" || lowered === "result") {
+        fg = colors.output || colors.success;
+      } else if (level === 1) {
+        fg = colors.accent || colors.code;
+      } else if (level === 2) {
+        fg = colors.text;
+      } else {
+        fg = colors.muted || "#5c6370";
+      }
+
+      out.push({ text, fg, attributes });
       continue;
     }
 
     if (trimmed.startsWith("> ")) {
       flushTable();
-      out.push({ text: trimmed.slice(2), fg: colors.muted });
+      out.push({ text: "  " + trimmed.slice(2), fg: colors.muted || "#5c6370", attributes: TextAttributes.ITALIC });
       continue;
     }
 
@@ -663,7 +706,10 @@ export function renderMarkdownLines(content, colors) {
     }
 
     flushTable();
-    out.push({ text: line, fg: colors.text });
+    const inlineParts = renderInline(line, colors);
+    for (const part of inlineParts) {
+      out.push(part);
+    }
   }
 
   flushTable();

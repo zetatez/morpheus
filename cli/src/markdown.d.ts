@@ -14,6 +14,7 @@ export type RenderColors = {
   accent?: string
   error?: string
   thinking?: string
+  summary?: string
 }
 
 export declare function renderMarkdownLines(
