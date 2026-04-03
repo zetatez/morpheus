@@ -13,7 +13,7 @@ bun run dev -- --url http://localhost:8080
 Or run the built binary:
 
 ```bash
-./morph repl
+./morpheus repl
 ```
 
 ## Options

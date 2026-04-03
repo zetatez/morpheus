@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Morpheus CLI Installer - Pythonic installation script."""
+"""Morpheus CLI Installer/Uninstaller - Automated installation and removal."""
 
 import argparse
 import logging
@@ -16,7 +16,7 @@ from urllib.request import urlopen
 from urllib.error import URLError
 
 VERSION = "0.1.0"
-BINARY_NAME = "morph"
+BINARY_NAME = "morpheus"
 RELEASE_BASE = "https://github.com/zetatez/morpheus/releases/download"
 
 
@@ -253,7 +253,7 @@ permissions:
       - "wget.*-O-\\s*\\|"
       - "chmod\\s+([ugo]+=[+,-][rwxst]+)\\s*-R"
       - "chmod\\s+[47]777"
-      - "chmod\\s+[0-7]{{4,4}}\\s+-R"
+      - "chmod\\s+[0-7]{{4,4}}\\s*-R"
       - "useradd"
       - "userdel"
       - "groupadd"
@@ -366,43 +366,159 @@ def create_dirs(data_dir: Path) -> None:
     logging.info(f"Created data directories in {data_dir}")
 
 
+def uninstall(install_dir: Path, config_dir: Path, data_dir: Path, remove_data: bool = False) -> None:
+    os_name = detect_os()
+    bin_name = binary_name(os_name)
+    bin_path = install_dir / bin_name
+
+    if not bin_path.exists() and not shutil.which(bin_name):
+        logging.warning(f"Morpheus binary not found at {bin_path}")
+        logging.info("Trying to locate installed binary...")
+
+    if bin_path.exists():
+        bin_path.unlink()
+        logging.info(f"Removed binary: {bin_path}")
+
+    if remove_data:
+        if config_dir.exists():
+            shutil.rmtree(config_dir)
+            logging.info(f"Removed config: {config_dir}")
+        if data_dir.exists():
+            shutil.rmtree(data_dir)
+            logging.info(f"Removed data: {data_dir}")
+        logging.info("All Morpheus data removed")
+    else:
+        if config_dir.exists():
+            logging.info(f"Preserved config: {config_dir}")
+        if data_dir.exists():
+            logging.info(f"Preserved data: {data_dir}")
+            logging.info("Use --remove-data to delete all data")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="install.py",
-        description="Morpheus CLI Installer",
+        description="Morpheus CLI Installer/Uninstaller",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--install-dir", type=Path, default=None, help="Installation directory (default: auto)")
-    parser.add_argument("--config-dir", type=Path, default=None, help="Configuration directory (default: auto)")
-    parser.add_argument("--data-dir", type=Path, default=None, help="Data directory (default: auto)")
-    parser.add_argument("-f", "--force", action="store_true", help="Force reinstall")
-    parser.add_argument("--no-config", action="store_true", help="Skip config file creation")
-    return parser.parse_args()
+
+    subparsers = parser.add_subparsers(dest="action", help="Action to perform")
+
+    install_parser = subparsers.add_parser("install", help="Install Morpheus")
+    install_parser.add_argument("--install-dir", type=Path, default=None, help="Installation directory (default: auto)")
+    install_parser.add_argument("--config-dir", type=Path, default=None, help="Configuration directory (default: auto)")
+    install_parser.add_argument("--data-dir", type=Path, default=None, help="Data directory (default: auto)")
+    install_parser.add_argument("-f", "--force", action="store_true", help="Force reinstall")
+    install_parser.add_argument("--no-config", action="store_true", help="Skip config file creation")
+    install_parser.add_argument("--no-data-dir", action="store_true", help="Skip data directory creation")
+
+    uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall Morpheus")
+    uninstall_parser.add_argument("--install-dir", type=Path, default=None, help="Installation directory")
+    uninstall_parser.add_argument("--config-dir", type=Path, default=None, help="Configuration directory")
+    uninstall_parser.add_argument("--data-dir", type=Path, default=None, help="Data directory")
+    uninstall_parser.add_argument("--remove-data", action="store_true", help="Remove all data (config, sessions, logs)")
+
+    subparsers.add_parser("status", help="Check installation status")
+    subparsers.add_parser("clean", help="Clean all Morpheus data (alias for uninstall --remove-data)")
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
+    args = parser.parse_args()
+
+    if args.action in ("uninstall", "clean"):
+        if args.action == "clean":
+            args.remove_data = True
+        if not hasattr(args, "install_dir"):
+            args.install_dir = None
+        if not hasattr(args, "config_dir"):
+            args.config_dir = None
+        if not hasattr(args, "data_dir"):
+            args.data_dir = None
+
+    return args
+
+
+def show_status(install_dir: Path, config_dir: Path, data_dir: Path) -> None:
+    os_name = detect_os()
+    bin_name = binary_name(os_name)
+    bin_path = install_dir / bin_name
+    in_path = shutil.which(bin_name)
+
+    print(f"Morpheus CLI v{VERSION}")
+    print("=" * 40)
+
+    if bin_path.exists():
+        print(f"[✓] Binary installed: {bin_path}")
+    elif in_path:
+        print(f"[✓] Binary in PATH: {in_path}")
+    else:
+        print(f"[×] Binary not found")
+
+    if config_dir.exists():
+        config_file = config_dir / "config.yaml"
+        if config_file.exists():
+            print(f"[✓] Config: {config_file}")
+        else:
+            print(f"[!] Config dir exists but no config.yaml: {config_dir}")
+    else:
+        print(f"[×] Config not found: {config_dir}")
+
+    if data_dir.exists():
+        print(f"[✓] Data: {data_dir}")
+    else:
+        print(f"[×] Data directory not found: {data_dir}")
+
+    print()
+    print("Directories:")
+    print(f"  Install: {install_dir}")
+    print(f"  Config:  {config_dir}")
+    print(f"  Data:    {data_dir}")
 
 
 def main() -> None:
     args = parse_args()
     setup_logging(args.verbose)
 
-    print(f"Morpheus CLI Installer v{VERSION}")
-    print("=" * 40)
-
     os_name = detect_os()
     arch = detect_arch()
 
-    install_dir = args.install_dir or get_default_install_dir()
-    config_dir = args.config_dir or get_default_config_dir()
-    data_dir = args.data_dir or get_default_data_dir()
+    install_dir = getattr(args, "install_dir", None) or get_default_install_dir()
+    config_dir = getattr(args, "config_dir", None) or get_default_config_dir()
+    data_dir = getattr(args, "data_dir", None) or get_default_data_dir()
+
+    if os_name == "unknown":
+        logging.error("Unsupported OS")
+        sys.exit(1)
+
+    if args.action == "status":
+        show_status(install_dir, config_dir, data_dir)
+        sys.exit(0)
+
+    if args.action in ("uninstall", "clean"):
+        print(f"Morpheus CLI Uninstaller v{VERSION}")
+        print("=" * 40)
+
+        if args.remove_data:
+            if not prompt_yes_no("This will remove ALL data including sessions, logs, and config. Continue?"):
+                sys.exit(0)
+        else:
+            if not prompt_yes_no("Uninstall Morpheus binary?"):
+                sys.exit(0)
+
+        uninstall(install_dir, config_dir, data_dir, args.remove_data)
+        logging.info("Uninstallation complete!")
+        sys.exit(0)
+
+    print(f"Morpheus CLI Installer v{VERSION}")
+    print("=" * 40)
 
     logging.info(f"OS: {os_name}, Arch: {arch}")
     logging.info(f"Install dir: {install_dir}")
     logging.info(f"Config dir: {config_dir}")
     logging.info(f"Data dir: {data_dir}")
-
-    if os_name == "unknown":
-        logging.error("Unsupported OS")
-        sys.exit(1)
 
     bin_name = binary_name(os_name)
     if shutil.which(bin_name) and not args.force:
@@ -419,7 +535,8 @@ def main() -> None:
             logging.error("Install directory not writable. Use --install-dir or run as root.")
             sys.exit(1)
 
-    create_dirs(data_dir)
+    if not args.no_data_dir:
+        create_dirs(data_dir)
     if not args.no_config:
         install_config(config_dir, data_dir)
     install_binary(os_name, arch, install_dir)

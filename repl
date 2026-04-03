@@ -1,1 +1,1 @@
-go run ./cmd/morph --config config.yaml repl
+go run ./cmd/morpheus --config config.yaml repl

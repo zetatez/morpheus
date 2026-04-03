@@ -25,17 +25,17 @@ Morpheus is a local AI agent runtime with tool execution, session persistence, M
 ```bash
 git clone https://github.com/zetatez/morpheus.git
 cd morpheus
-go build -o morph ./cmd/morph
+go build -o morpheus ./cmd/morpheus
 ```
 
 ### Quick Start
 
 ```bash
 # Run with REPL mode (requires bun for TUI)
-./morph repl
+./morpheus repl
 
 # Or start API server only
-./morph serve
+./morpheus serve
 ```
 
 ### Python Installer
@@ -182,19 +182,19 @@ Morpheus automatically coordinates multiple specialized subagents (up to 9) for 
 ### REPL Mode
 
 ```bash
-morph repl                      # Start with TUI frontend
-morph repl --session my-session # Resume specific session
-morph repl --prompt "task"      # Run initial prompt
-morph repl --url http://host:8080  # Connect to remote server
-morph repl --model gpt-4o       # Specify model
-morph repl --plan               # Plan mode (read-only)
+morpheus repl                      # Start with TUI frontend
+morpheus repl --session my-session # Resume specific session
+morpheus repl --prompt "task"      # Run initial prompt
+morpheus repl --url http://host:8080  # Connect to remote server
+morpheus repl --model gpt-4o       # Specify model
+morpheus repl --plan               # Plan mode (read-only)
 ```
 
 ### Server Mode
 
 ```bash
-morph serve                     # Start HTTP API server
-morph serve --config path/to/config.yaml
+morpheus serve                     # Start HTTP API server
+morpheus serve --config path/to/config.yaml
 ```
 
 ## REST API
@@ -401,13 +401,13 @@ See [docs/architecture.md](docs/architecture.md) for details.
 
 ```bash
 # Run from source
-go run ./cmd/morph
+go run ./cmd/morpheus
 
 # Run tests
 go test ./...
 
 # Build
-go build -o morph ./cmd/morph
+go build -o morpheus ./cmd/morpheus
 ```
 
 ## CI/CD

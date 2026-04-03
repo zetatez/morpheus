@@ -61,16 +61,16 @@ jobs:
           cache: true
 
       - name: Build binary
-        run: go build -o morph ./cmd/morph
+        run: go build -o morpheus ./cmd/morpheus
 
       - name: Verify binary
         run: |
-          if [ ! -f morph ]; then
+          if [ ! -f morpheus ]; then
             echo "Binary not created"
             exit 1
           fi
           echo "Binary created successfully"
-          ls -la morph
+          ls -la morpheus
 
   cross-platform:
     name: Cross-platform Build
@@ -97,10 +97,10 @@ jobs:
           if [ "$GOOS" = "windows" ]; then
             ext=".exe"
           fi
-          go build -o morph-${GOOS}-${GOARCH}${ext} ./cmd/morph
+          go build -o morpheus-${GOOS}-${GOARCH}${ext} ./cmd/morpheus
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: morph-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: morph-${{ matrix.goos }}-${{ matrix.goarch }}*
+          name: morpheus-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: morpheus-${{ matrix.goos }}-${{ matrix.goarch }}*
