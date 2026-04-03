@@ -667,19 +667,17 @@ export function renderMarkdownLines(content, colors) {
       const text = heading[2] || "";
       const lowered = text.toLowerCase().trim();
 
-      let fg;
-      let attributes = level <= 2 ? TextAttributes.BOLD : undefined;
+      const headingColors = ["#00e5ff", "#4fc1ff", "#6ec1e4", "#89bdff", "#a0c7ff", "#b8d4ed"];
+      const headingFg = headingColors[level - 1] || "#b8d4ed";
+      const attributes = TextAttributes.BOLD;
 
+      let fg;
       if (lowered === "error" && colors.error) {
         fg = colors.error;
       } else if (lowered === "output" || lowered === "result") {
-        fg = colors.output || colors.success;
-      } else if (level === 1) {
-        fg = colors.accent || colors.code;
-      } else if (level === 2) {
-        fg = colors.text;
+        fg = colors.output || "#98c379";
       } else {
-        fg = colors.muted || "#5c6370";
+        fg = headingFg;
       }
 
       out.push({ text, fg, attributes });
