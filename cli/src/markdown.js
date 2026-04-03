@@ -274,7 +274,7 @@ function highlightCode(code, lang) {
       }
 
       const wordMatch = remaining.slice(pos).match(/^[a-zA-Z_][a-zA-Z0-9_]*/);
-      if (wordMatch) {
+      if (wordMatch && wordMatch[0].length > 0) {
         const word = wordMatch[0];
         if (keywordSet.has(word)) {
           tokens.push({ type: "keyword", text: word });
@@ -372,15 +372,17 @@ function renderCodeBlock(out, lang, lines, colors) {
         out.push({ text: "  ", fg: colors.code });
         continue;
       }
-      const nonWhitespaceTokens = lineTokens.filter(t => t.type !== "whitespace");
-      const isOnlyKeywords = nonWhitespaceTokens.length > 0 && nonWhitespaceTokens.every(t => t.type === "keyword");
 
-      let lineText = "";
+      const spans = [];
       for (const token of lineTokens) {
-        lineText += token.text;
+        if (token.type === "keyword") {
+          spans.push({ text: token.text, fg: COLORS.keyword });
+        } else {
+          spans.push({ text: token.text, fg: colors.code });
+        }
       }
-      const lineFg = isOnlyKeywords ? COLORS.keyword : colors.code;
-      out.push({ text: "  " + lineText, fg: lineFg });
+
+      out.push({ spans });
     }
   }
 

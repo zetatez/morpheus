@@ -1,7 +1,14 @@
+export type MarkdownSpan = {
+  text: string
+  fg?: string
+  attributes?: number
+}
+
 export type MarkdownLine = {
   text?: string
   fg?: string
   attributes?: number
+  spans?: MarkdownSpan[]
 }
 
 export type RenderColors = {

@@ -127,9 +127,21 @@ export function ChatEntries(props: ChatEntriesProps) {
                   thinking: theme.thinking,
                 })}>
                   {(line) => (
-                    <text fg={line.fg ?? theme.text} attributes={line.attributes}>
-                      {line.text}
-                    </text>
+                    <Show when={line.spans} fallback={
+                      <text fg={line.fg ?? theme.text} attributes={line.attributes}>
+                        {line.text}
+                      </text>
+                    }>
+                      <box flexDirection="row">
+                        <For each={line.spans}>
+                          {(span) => (
+                            <text fg={span.fg ?? theme.text} attributes={span.attributes}>
+                              {span.text}
+                            </text>
+                          )}
+                        </For>
+                      </box>
+                    </Show>
                   )}
                 </For>
               </box>
