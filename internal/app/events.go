@@ -125,6 +125,67 @@ func (s *APIServer) handleGlobalEvent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *APIServer) handleGlobalSyncEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch := s.eventBroadcaster.subscribe()
+	defer s.eventBroadcaster.unsubscribe(ch)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	closeNotify := w.(http.CloseNotifier).CloseNotify()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-closeNotify:
+			return
+		case <-ticker.C:
+			_, err := w.Write([]byte(": ping\n\n"))
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+		case event := <-ch:
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			_, err = w.Write([]byte("data: "))
+			if err != nil {
+				return
+			}
+			_, err = w.Write(data)
+			if err != nil {
+				return
+			}
+			_, err = w.Write([]byte("\n\n"))
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *APIServer) broadcastEvent(eventType string, data map[string]interface{}) {
 	s.eventBroadcaster.broadcast(globalEvent{
 		Type:      eventType,
@@ -150,7 +211,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 			{"url": "http://localhost:8080", "description": "Local server"},
 		},
 		"paths": map[string]interface{}{
-			"/health": map[string]interface{}{
+			"/global/health": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Health check",
 					"operationId": "getHealth",
@@ -1360,7 +1421,7 @@ func (s *APIServer) handleSessionShare(w http.ResponseWriter, r *http.Request) {
 		"ok":         true,
 		"session_id": sessionID,
 		"shared":     true,
-		"share_url":  fmt.Sprintf("/sessions/%s", sessionID),
+		"share_url":  fmt.Sprintf("/session/%s", sessionID),
 	})
 }
 
@@ -1387,10 +1448,78 @@ func (s *APIServer) handleSessionSummarize(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (s *APIServer) handleQuestionReject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	requestID := strings.TrimPrefix(r.URL.Path, "/question/")
+	requestID = strings.TrimSuffix(requestID, "/reject")
+	if requestID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	_, exists := s.runtime.pendingConfirmations.LoadAndDelete(requestID)
+	if !exists {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "question not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "request_id": requestID, "rejected": true})
+}
+
+func (s *APIServer) handleSessionLoad(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
+	sessionID = strings.TrimSuffix(sessionID, "/load")
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	if err := s.runtime.LoadSession(r.Context(), sessionID); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": sessionID})
+}
+
+func (s *APIServer) handleProjectList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"projects": []map[string]interface{}{
+			{
+				"id":         "default",
+				"name":       filepath.Base(s.runtime.cfg.WorkspaceRoot),
+				"path":       s.runtime.cfg.WorkspaceRoot,
+				"is_current": true,
+			},
+		},
+	})
+}
+
 func (s *APIServer) handleSession(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleSessions(w, r)
+		s.handleSessionList(w, r)
 	case http.MethodPost:
 		s.handleSessionCreate(w, r)
 	default:
@@ -1676,31 +1805,6 @@ func (s *APIServer) handleQuestionReply(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "request_id": requestID, "answer": body.Answer})
-}
-
-func (s *APIServer) handleQuestionReject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	requestID := strings.TrimPrefix(r.URL.Path, "/question/")
-	requestID = strings.TrimSuffix(requestID, "/reject")
-	if requestID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id is required"})
-		return
-	}
-
-	_, exists := s.runtime.pendingConfirmations.LoadAndDelete(requestID)
-	if !exists {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "question not found"})
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "request_id": requestID, "rejected": true})
 }
 
 func (s *APIServer) handleProvider(w http.ResponseWriter, r *http.Request) {

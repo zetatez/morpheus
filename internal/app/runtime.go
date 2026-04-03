@@ -2879,39 +2879,64 @@ func (rt *Runtime) StartAPIServer(ctx context.Context) error {
 }
 
 func (s *APIServer) registerRoutes() {
-	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/global/health", s.handleHealth)
+	s.mux.HandleFunc("/global/event", s.handleGlobalEvent)
+	s.mux.HandleFunc("/global/sync-event", s.handleGlobalSyncEvent)
+	s.mux.HandleFunc("/global/config", s.handleConfig)
 	s.mux.HandleFunc("/shell", s.handleShell)
 	s.mux.HandleFunc("/event", s.handleGlobalEvent)
 	s.mux.HandleFunc("/doc", s.handleDoc)
-	s.mux.HandleFunc("/config/", s.handleConfig)
 	s.mux.HandleFunc("/permission/", s.handlePermission)
-	s.mux.HandleFunc("/permission/", s.handlePermissionReply)
+	s.mux.HandleFunc("/permission/{id}/reply", s.handlePermissionReply)
 	s.mux.HandleFunc("/question/", s.handleQuestion)
-	s.mux.HandleFunc("/question/", s.handleQuestionReply)
+	s.mux.HandleFunc("/question/{id}/reply", s.handleQuestionReply)
+	s.mux.HandleFunc("/question/{id}/reject", s.handleQuestionReject)
 	s.mux.HandleFunc("/mcp/", s.handleMCP)
-	s.mux.HandleFunc("/mcp/", s.handleMCPConnect)
+	s.mux.HandleFunc("/mcp/{name}/connect", s.handleMCPConnect)
+	s.mux.HandleFunc("/mcp/{name}/disconnect", s.handleMCPDisconnect)
 	s.mux.HandleFunc("/find", s.handleFind)
 	s.mux.HandleFunc("/find/file", s.handleFindFile)
 	s.mux.HandleFunc("/find/symbol", s.handleFindSymbol)
 	s.mux.HandleFunc("/file", s.handleFileList)
 	s.mux.HandleFunc("/file/content", s.handleFileContent)
 	s.mux.HandleFunc("/file/status", s.handleFileStatus)
-	s.mux.HandleFunc("/project/", s.handleProjectByID)
+	s.mux.HandleFunc("/project/", s.handleProjectList)
+	s.mux.HandleFunc("/project/{id}", s.handleProjectByID)
 	s.mux.HandleFunc("/project/current", s.handleProjectCurrent)
 	s.mux.HandleFunc("/project/git/init", s.handleProjectGitInit)
 	s.mux.HandleFunc("/provider/", s.handleProvider)
 	s.mux.HandleFunc("/provider/auth", s.handleProviderAuth)
-	s.mux.HandleFunc("/session/", s.handleSession)
+	s.mux.HandleFunc("/session/", s.handleSessionList)
 	s.mux.HandleFunc("/session/status", s.handleSessionStatus)
+	s.mux.HandleFunc("/session/{id}", s.handleSessionByID)
+	s.mux.HandleFunc("/session/{id}/load", s.handleSessionLoad)
+	s.mux.HandleFunc("/session/{id}/children", s.handleSessionChildren)
+	s.mux.HandleFunc("/session/{id}/todo", s.handleSessionTodo)
+	s.mux.HandleFunc("/session/{id}/init", s.handleSessionInit)
+	s.mux.HandleFunc("/session/{id}/fork", s.handleSessionFork)
+	s.mux.HandleFunc("/session/{id}/abort", s.handleSessionAbort)
+	s.mux.HandleFunc("/session/{id}/share", s.handleSessionShare)
+	s.mux.HandleFunc("/session/{id}/summarize", s.handleSessionSummarize)
+	s.mux.HandleFunc("/session/{id}/diff", s.handleSessionDiff)
+	s.mux.HandleFunc("/session/{id}/revert", s.handleSessionRevert)
+	s.mux.HandleFunc("/session/{id}/unrevert", s.handleSessionUnrevert)
+	s.mux.HandleFunc("/session/{id}/message", s.handleSessionMessage)
+	s.mux.HandleFunc("/session/{id}/message/{messageID}", s.handleSessionMessageByID)
+	s.mux.HandleFunc("/session/{id}/message/{messageID}/part/{partID}", s.handleSessionMessagePart)
+	s.mux.HandleFunc("/session/{id}/command", s.handleSessionCommand)
+	s.mux.HandleFunc("/session/{id}/shell", s.handleSessionShell)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/tasks/", s.handleTasks)
+	s.mux.HandleFunc("/tasks/{id}", s.handleTaskByID)
 	s.mux.HandleFunc("/plan", s.wrapLimited("plan", s.handlePlan))
 	s.mux.HandleFunc("/execute", s.wrapLimited("execute", s.handleExecute))
 	s.mux.HandleFunc("/chat", s.wrapLimited("chat", s.handleChat))
-	s.mux.HandleFunc("/skill", s.handleSkillByName)
+	s.mux.HandleFunc("/skill", s.handleSkillList)
+	s.mux.HandleFunc("/skill/{name}", s.handleSkillByName)
 	s.mux.HandleFunc("/models/", s.handleModels)
 	s.mux.HandleFunc("/models/select", s.handleModelSelect)
 	s.mux.HandleFunc("/runs/", s.handleRuns)
+	s.mux.HandleFunc("/runs/{id}", s.handleRunByID)
 	s.mux.HandleFunc("/remote-file", s.handleRemoteFile)
 	s.mux.HandleFunc("/ssh-info", s.handleSSHInfo)
 	s.mux.HandleFunc("/ws", s.handleRemoteWS)
@@ -3646,7 +3671,7 @@ type SessionInfo struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
+func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -3815,7 +3840,7 @@ func (s *APIServer) ensureSkillsLoaded(ctx context.Context) {
 	_ = s.skills.Load(ctx)
 }
 
-func (s *APIServer) handleSkills(w http.ResponseWriter, r *http.Request) {
+func (s *APIServer) handleSkillList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return

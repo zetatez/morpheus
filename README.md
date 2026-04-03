@@ -203,11 +203,12 @@ morpheus serve --config path/to/config.yaml
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/event` | SSE event stream |
+| GET | `/global/health` | Health check |
+| GET | `/global/event` | SSE event stream |
+| GET | `/global/sync-event` | SSE sync event stream |
+| GET | `/global/config` | Get configuration |
+| PATCH | `/global/config` | Update configuration |
 | GET | `/doc` | OpenAPI documentation |
-| GET | `/config/` | Get configuration |
-| PATCH | `/config/` | Update configuration |
 | POST | `/chat` | Chat with agent |
 | POST | `/plan` | Generate plan |
 | POST | `/execute` | Execute plan |
