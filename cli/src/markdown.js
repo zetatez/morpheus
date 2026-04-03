@@ -6,10 +6,18 @@ export function renderMarkdownLines(content, colors) {
     let codeLang = "";
     let codeBuffer = [];
     let inThinking = false;
+    let tableState = null;
+    const flushTable = () => {
+        if (tableState) {
+            out.push(...renderTable(tableState, colors));
+            tableState = null;
+        }
+    };
     for (const raw of lines) {
         const line = raw ?? "";
         const trimmed = line.trim();
         if (trimmed.startsWith("```")) {
+            flushTable();
             if (inCode) {
                 flushCodeBlock(out, { lang: codeLang, content: codeBuffer }, colors);
                 inCode = false;
@@ -29,6 +37,7 @@ export function renderMarkdownLines(content, colors) {
         }
         const thinkingLine = normalizeThinkingLine(trimmed);
         if (thinkingLine) {
+            flushTable();
             inThinking = true;
             const rest = thinkingLine.slice("Thinking:".length).trimStart();
             const label = "Thinking:";
@@ -40,6 +49,7 @@ export function renderMarkdownLines(content, colors) {
         }
         const summaryLine = normalizeSummaryLine(trimmed);
         if (summaryLine) {
+            flushTable();
             const rest = summaryLine.slice("Summary:".length).trimStart();
             const label = "Summary:";
             out.push({ text: label, fg: colors.accent ?? colors.code, attributes: TextAttributes.BOLD });
@@ -62,11 +72,13 @@ export function renderMarkdownLines(content, colors) {
             continue;
         }
         if (trimmed === "") {
+            flushTable();
             out.push({ text: " " });
             continue;
         }
         const checkbox = /^[-*]\s+\[([ xX~\-])\]\s+(.*)$/.exec(trimmed);
         if (checkbox) {
+            flushTable();
             const status = checkbox[1];
             const label = checkbox[2] ?? "";
             const normalized = `[${status}] ${label}`.trimEnd();
@@ -82,16 +94,17 @@ export function renderMarkdownLines(content, colors) {
             continue;
         }
         if (/^---+$/.test(trimmed)) {
-            out.push({ text: "--------------------------------", fg: colors.muted });
             continue;
         }
         const list = /^[-*]\s+(.*)$/.exec(trimmed);
         if (list) {
+            flushTable();
             out.push({ text: `- ${list[1]}`, fg: colors.text });
             continue;
         }
         const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
         if (heading) {
+            flushTable();
             const level = heading[1].length;
             const text = heading[2] || "";
             const lowered = text.toLowerCase().trim();
@@ -108,11 +121,30 @@ export function renderMarkdownLines(content, colors) {
             continue;
         }
         if (trimmed.startsWith("> ")) {
+            flushTable();
             out.push({ text: trimmed.slice(2), fg: colors.muted });
             continue;
         }
+        if (trimmed.startsWith("|")) {
+            const cells = trimmed.split("|").filter(c => c !== "").map(c => c.trim());
+            if (cells.length >= 2) {
+                if (!tableState) {
+                    tableState = { rows: [], colWidths: [], colCount: cells.length };
+                }
+                tableState.rows.push(cells);
+                for (let i = 0; i < cells.length; i++) {
+                    if (i >= tableState.colWidths.length) {
+                        tableState.colWidths.push(0);
+                    }
+                    tableState.colWidths[i] = Math.max(tableState.colWidths[i], cells[i].length);
+                }
+                continue;
+            }
+        }
+        flushTable();
         out.push({ text: line, fg: colors.text });
     }
+    flushTable();
     return out;
 }
 function flushCodeBlock(out, block, colors) {
@@ -163,4 +195,29 @@ function isThinkingCommand(trimmed) {
     if (trimmed.startsWith("-> "))
         return true;
     return false;
+}
+function renderTable(table, colors) {
+    if (table.rows.length === 0)
+        return [];
+    const out = [];
+    const totalWidth = table.colWidths.reduce((a, b) => a + b, 0) + table.colCount * 3 + 1;
+    const divider = "─".repeat(totalWidth - 2);
+    const padRow = (cells, isHeader) => {
+        const padded = cells.map((cell, i) => {
+            const width = table.colWidths[i] ?? cell.length;
+            return cell.padEnd(width);
+        });
+        return "│ " + padded.join(" │ ") + " │";
+    };
+    out.push({ text: "┌" + divider + "┐", fg: colors.accent ?? colors.muted });
+    const header = table.rows[0];
+    out.push({ text: padRow(header, true), fg: colors.accent ?? colors.text, attributes: TextAttributes.BOLD });
+    if (table.rows.length > 1) {
+        out.push({ text: "├" + divider + "┤", fg: colors.accent ?? colors.muted });
+    }
+    for (let i = 1; i < table.rows.length; i++) {
+        out.push({ text: padRow(table.rows[i], false), fg: colors.text });
+    }
+    out.push({ text: "└" + divider + "┘", fg: colors.accent ?? colors.muted });
+    return out;
 }

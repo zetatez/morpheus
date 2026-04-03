@@ -1880,10 +1880,8 @@ export function App(props: AppProps) {
           {notification() ? (
             <text fg={theme.success}>{notification()}</text>
           ) : (
-            <text fg={theme.muted}>⚡ {serverMetrics()?.resource?.cpu_percent != null ? `${serverMetrics()?.resource?.cpu_percent?.toFixed(0)}%` : "-"}</text>
+            <text fg={theme.muted}>⚡{serverMetrics()?.resource?.cpu_percent?.toFixed(0) ?? "-"}% 💾{serverMetrics()?.resource?.mem_percent?.toFixed(0) ?? "-"}%</text>
           )}
-          <box paddingLeft={2} />
-          <text fg={theme.muted}>📊 {serverMetrics()?.resource?.mem_percent != null ? `${serverMetrics()?.resource?.mem_percent?.toFixed(0)}%` : "-"}</text>
         </box>
         {attachments().length > 0 && (
           <box flexDirection="row" paddingBottom={1} flexWrap="wrap">
