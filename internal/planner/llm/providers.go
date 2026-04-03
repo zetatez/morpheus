@@ -74,7 +74,7 @@ func NewMiniMaxProvider(config PlannerProviderConfig) (Planner, error) {
 	}
 	endpoint := config.Endpoint
 	if endpoint == "" {
-		endpoint = "https://api.minimax.chat/v1"
+		endpoint = "https://api.minimaxi.com"
 	}
 	return &MiniMaxProvider{
 		apiKey:     config.APIKey,
@@ -111,7 +111,7 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 		return sdk.Plan{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/v1/text/chatcompletion_v2", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/text/chatcompletion_v2", bytes.NewReader(body))
 	if err != nil {
 		return sdk.Plan{}, err
 	}
