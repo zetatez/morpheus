@@ -91,22 +91,22 @@ function getLangLabel(lang) {
 }
 
 const COLORS = {
-  keyword: "#4fc1ff",
-  keyword2: "#4fc1ff",
+  keyword: "#00e5ff",
+  keyword2: "#00e5ff",
   string: "#98c379",
-  number: "#4fc1ff",
+  number: "#00e5ff",
   comment: "#5c6370",
-  function: "#61afef",
-  variable: "#abb2bf",
-  type: "#61afef",
+  function: "#6ec1e4",
+  variable: "#6ec1e4",
+  type: "#6ec1e4",
   operator: "#56b6c2",
   punctuation: "#abb2bf",
-  attribute: "#4fc1ff",
-  builtin: "#61afef",
-  constant: "#4fc1ff",
-  selector: "#4fc1ff",
-  property: "#abb2bf",
-  tag: "#4fc1ff",
+  attribute: "#00e5ff",
+  builtin: "#6ec1e4",
+  constant: "#00e5ff",
+  selector: "#00e5ff",
+  property: "#6ec1e4",
+  tag: "#00e5ff",
 };
 
 const KEYWORDS = {
@@ -377,6 +377,8 @@ function renderCodeBlock(out, lang, lines, colors) {
       for (const token of lineTokens) {
         if (token.type === "keyword") {
           spans.push({ text: token.text, fg: COLORS.keyword });
+        } else if (token.type === "comment") {
+          spans.push({ text: token.text, fg: COLORS.comment });
         } else {
           spans.push({ text: token.text, fg: colors.code });
         }
@@ -394,7 +396,7 @@ function renderInlineCode(text, colors) {
 }
 
 function renderStrong(text, colors) {
-  return { text, fg: colors.text, attributes: TextAttributes.BOLD };
+  return { text, fg: "#00e5ff", attributes: TextAttributes.BOLD };
 }
 
 function renderEmphasis(text, colors) {
