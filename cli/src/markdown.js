@@ -1,5 +1,51 @@
 import { TextAttributes } from "@opentui/core";
 
+// Shiki syntax highlighter singleton
+let shikiHighlighter = null;
+let shikiInitPromise = null;
+let shikiReady = false;
+
+const SHIKI_LANGS = [
+  "javascript", "typescript", "python", "go", "rust", "java", "c", "cpp",
+  "bash", "sh", "json", "yaml", "toml", "html", "css", "scss", "sql",
+  "diff", "markdown", "text", "jsx", "tsx", "vue", "svelte",
+];
+
+async function initShikiHighlighter() {
+  try {
+    const { createHighlighter } = await import("shiki");
+    const h = await createHighlighter({
+      themes: ["github-dark"],
+      langs: SHIKI_LANGS,
+    });
+    shikiHighlighter = h;
+    shikiReady = true;
+    console.info("Shiki syntax highlighting initialized");
+    return h;
+  } catch (e) {
+    console.warn("Shiki init failed, using regex fallback:", e?.message);
+    shikiHighlighter = null;
+    shikiReady = false;
+    return null;
+  }
+}
+
+// Start initialization in background (non-blocking)
+initShikiHighlighter();
+
+function highlightWithShiki(code, lang) {
+  if (!shikiHighlighter || !shikiReady) return null;
+  try {
+    const result = shikiHighlighter.codeToTokens(code, {
+      lang: lang || "text",
+      theme: "github-dark",
+    });
+    return result.tokens;
+  } catch (e) {
+    return null;
+  }
+}
+
 const MONOKAI = {
   keyword: "#f92672",
   built_in: "#66d9ef",
@@ -401,8 +447,23 @@ function renderCodeBlock(out, lang, lines, colors) {
       }
     }
   } else {
-    for (const line of lines) {
-      out.push({ text: "  " + line, fg: colors.code });
+    const code = lines.join("\n");
+    const shikiTokens = highlightWithShiki(code, lang);
+
+    if (shikiTokens) {
+      // Shiki highlighting: tokens is 2D array [line][token]
+      for (let i = 0; i < shikiTokens.length; i++) {
+        out.push({ text: "  " });
+        for (const token of shikiTokens[i]) {
+          out.push({ text: token.content, fg: token.color || colors.code });
+        }
+      }
+    } else {
+      // Fall back to regex highlighter
+      const highlighted = highlightCodeFallback(code, lang);
+      for (const item of highlighted) {
+        out.push({ text: "  " + item.text, fg: item.fg });
+      }
     }
   }
 
