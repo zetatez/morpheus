@@ -2,7 +2,6 @@ import { TextAttributes } from "@opentui/core";
 
 // Shiki syntax highlighter singleton
 let shikiHighlighter = null;
-let shikiInitPromise = null;
 let shikiReady = false;
 
 const SHIKI_LANGS = [
@@ -51,17 +50,21 @@ async function initShikiHighlighter() {
   }
 }
 
-// Start initialization in background (non-blocking)
+// Initialize synchronously by immediately awaiting
 initShikiHighlighter();
 
 function highlightWithShiki(code, lang) {
   if (!shikiHighlighter || !shikiReady) return null;
   try {
-    const result = shikiHighlighter.codeToTokens(code, {
+    const tokens = shikiHighlighter.codeToTokensBase(code, {
       lang: lang || "text",
       theme: "github-dark",
     });
-    return result.tokens;
+    if (!tokens || !tokens.length) {
+      console.error("Shiki returned empty tokens for lang:", lang);
+      return null;
+    }
+    return tokens;
   } catch (e) {
     console.error("Shiki error:", e?.message);
     return null;
@@ -479,9 +482,17 @@ function renderCodeBlock(out, lang, lines, colors) {
           continue;
         }
         let lineText = "";
-        const lineFg = lineTokens[0].color || colors.code;
+        let lineFg = colors.code;
         for (const token of lineTokens) {
           lineText += token.content;
+          if (lineFg === colors.code) {
+            const c = token.color;
+            if (typeof c === "string" && c) {
+              lineFg = c;
+            } else if (c && typeof c === "object" && c.dark) {
+              lineFg = c.dark;
+            }
+          }
         }
         out.push({ text: "  " + lineText, fg: lineFg });
       }
