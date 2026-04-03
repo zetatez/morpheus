@@ -38,6 +38,30 @@ go build -o morph ./cmd/morph
 ./morph serve
 ```
 
+### Python Installer
+
+```bash
+python install.py --help
+python install.py --install          # Install to ~/.local/bin
+python install.py --install --prefix /usr/local  # Custom prefix
+```
+
+## VSCode Extension
+
+Morpheus provides a VSCode extension for native IDE integration.
+
+```bash
+cd extensions/vscode
+npm install
+npm run compile
+```
+
+**Features:**
+- Chat panel (`Ctrl+Shift+M` / `Cmd+Shift+M`)
+- Inline code editing
+- Code explanation and refactoring
+- Configurable endpoint, API key, and model parameters
+
 ## Configuration
 
 Create `config.yaml` in one of these locations (in order of priority):
@@ -365,6 +389,9 @@ Morpheus automatically compresses context when tokens exceed 60,000.
 │              │      Policy Engine            │               │
 │              │   (Risk Assessment)           │               │
 │              └───────────────────────────────┘               │
+├─────────────────────────────────────────────────────────────────┤
+│                      VSCode Extension                            │
+│  (Chat Panel / Inline Edit / Code Explanation)                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -382,6 +409,13 @@ go test ./...
 # Build
 go build -o morph ./cmd/morph
 ```
+
+## CI/CD
+
+GitHub Actions workflow runs on push to `main` and pull requests:
+
+- **CI**: Lint, build, and test
+- See [.github/workflows/ci.yml](.github/workflows/ci.yml)
 
 ## Tech Stack
 
