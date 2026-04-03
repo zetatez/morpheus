@@ -156,7 +156,9 @@ func (p *BasePlanner) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Plan, 
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
 	for k, v := range p.extraHeaders {
 		httpReq.Header.Set(k, v)
 	}

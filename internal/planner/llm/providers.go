@@ -65,18 +65,21 @@ func NewMiniMaxProvider(config PlannerProviderConfig) (Planner, error) {
 	}
 	model := config.Model
 	if model == "" {
-		model = "MiniMax-Text-01"
+		model = "abab6.5s-chat"
 	}
 	endpoint := config.Endpoint
 	if endpoint == "" {
 		endpoint = "https://api.minimaxi.com/anthropic/v1/messages"
 	}
-	headers := map[string]string{}
+	headers := map[string]string{
+		"x-api-key":         config.APIKey,
+		"anthropic-version": "2023-06-01",
+	}
 	for k, v := range config.ExtraHeaders {
 		headers[k] = v
 	}
 	return &MiniMaxProvider{
-		BasePlanner: NewBasePlanner(config.APIKey, model, config.Temperature, endpoint, headers),
+		BasePlanner: NewBasePlanner("", model, config.Temperature, endpoint, headers),
 	}, nil
 }
 

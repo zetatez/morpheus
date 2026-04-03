@@ -2824,17 +2824,18 @@ const (
 )
 
 type APIServer struct {
-	runtime     *Runtime
-	tasks       map[string]*Task
-	tasksMu     sync.RWMutex
-	mux         *http.ServeMux
-	logger      *zap.Logger
-	skills      *skill.Loader
-	skillsPaths []string
-	modelStore  *configstore.Store
-	activeSkill string
-	monitor     *resourceMonitor
-	metrics     *serverMetrics
+	runtime          *Runtime
+	tasks            map[string]*Task
+	tasksMu          sync.RWMutex
+	mux              *http.ServeMux
+	logger           *zap.Logger
+	skills           *skill.Loader
+	skillsPaths      []string
+	modelStore       *configstore.Store
+	activeSkill      string
+	monitor          *resourceMonitor
+	metrics          *serverMetrics
+	eventBroadcaster *eventBroadcaster
 }
 
 func NewAPIServer(rt *Runtime) *APIServer {
@@ -2850,9 +2851,10 @@ func NewAPIServer(rt *Runtime) *APIServer {
 			globalSkillsPath,
 			projectSkillsPath,
 		},
-		modelStore: configstore.NewStore(""),
-		monitor:    newResourceMonitor(time.Duration(rt.cfg.Server.Limits.SampleIntervalMs) * time.Millisecond),
-		metrics:    rt.metrics,
+		modelStore:       configstore.NewStore(""),
+		monitor:          newResourceMonitor(time.Duration(rt.cfg.Server.Limits.SampleIntervalMs) * time.Millisecond),
+		metrics:          rt.metrics,
+		eventBroadcaster: newEventBroadcaster(),
 	}
 }
 
