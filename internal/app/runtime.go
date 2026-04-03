@@ -24,6 +24,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zetatez/morpheus/internal/attestation"
 	"github.com/zetatez/morpheus/internal/config"
 	"github.com/zetatez/morpheus/internal/configstore"
 	"github.com/zetatez/morpheus/internal/convo"
@@ -93,13 +94,6 @@ type sessionIntentState struct {
 	entries map[string]intentClassification
 }
 
-type sessionCheckpointState struct {
-	mu               sync.RWMutex
-	entries          []session.CheckpointMetadata
-	lastCheckpointAt time.Time
-	seq              int64
-}
-
 type pendingConfirmation struct {
 	Tool     string
 	Inputs   map[string]any
@@ -146,6 +140,11 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if err := runAttestationCheck(logger); err != nil {
+		return nil, err
+	}
+
 	conv := convo.NewManager()
 	plugins := plugin.NewRegistry()
 	if soulPrompt, err := loadSoulPrompt(); err != nil {
@@ -699,10 +698,6 @@ func (rt *Runtime) createCheckpoint(sessionID, toolName string, inputs map[strin
 	return session.CheckpointMetadata{ID: id, Ref: ref, Tool: toolName, CreatedAt: time.Now().UTC(), Summary: summary}, nil
 }
 
-func checkpointMessage(id, summary string) string {
-	return fmt.Sprintf("morpheus checkpoint %s [%s]", id, summary)
-}
-
 func (rt *Runtime) resolveCheckpointRef(workspace, message string) (string, error) {
 	cmd := exec.Command("git", "stash", "list", "--format=%gd:%s")
 	cmd.Dir = workspace
@@ -861,24 +856,6 @@ func (rt *Runtime) isGitWorkspace() bool {
 	}
 	info, err := os.Stat(filepath.Join(workspace, ".git"))
 	return err == nil && !info.IsDir() || err == nil && info.IsDir()
-}
-
-func checkpointSummary(toolName string, inputs map[string]any) string {
-	summary := strings.TrimSpace(toolName)
-	switch toolName {
-	case "cmd.exec":
-		if command, _ := inputs["command"].(string); strings.TrimSpace(command) != "" {
-			summary = truncate(strings.TrimSpace(command), 80)
-		}
-	case "fs.write", "fs.edit", "fs.read", "bash":
-		if path, _ := inputs["path"].(string); strings.TrimSpace(path) != "" {
-			summary = fmt.Sprintf("%s %s", toolName, strings.TrimSpace(path))
-		}
-	}
-	if summary == "" {
-		summary = "tool execution"
-	}
-	return summary
 }
 
 func (rt *Runtime) handleCheckpointCommand(ctx context.Context, sessionID, input string) (Response, bool, error) {
@@ -1431,197 +1408,6 @@ func extractRequestedSubagents(input string) []string {
 	return out
 }
 
-func formatMCPResourceUpdate(server, uri string, payload map[string]any) string {
-	delete(payload, "session_id")
-	structured := summarizeMCPResourcePayload(server, uri, payload)
-	body, _ := json.MarshalIndent(structured, "", "  ")
-	return fmt.Sprintf("MCP resource updated\n%s", string(body))
-}
-
-func mcpResourceUpdatePart(server, uri string, payload map[string]any) sdk.MessagePart {
-	delete(payload, "session_id")
-	return sdk.MessagePart{
-		Type:   "tool",
-		Tool:   "mcp.resource_update",
-		Status: "updated",
-		Input: map[string]any{
-			"server": server,
-			"uri":    uri,
-		},
-		Output: summarizeMCPResourcePayload(server, uri, payload),
-	}
-}
-
-func summarizeMCPResourcePayload(server, uri string, payload map[string]any) map[string]any {
-	result := map[string]any{
-		"server":      server,
-		"uri":         uri,
-		"change_type": detectMCPChangeType(payload),
-	}
-
-	contents, _ := payload["contents"].([]any)
-	if len(contents) > 0 {
-		result["summary"] = summarizeMCPContents(contents)
-		result["highlights"] = extractMCPHighlights(contents)
-		result["truncated"] = isMCPContentTruncated(contents)
-		return result
-	}
-
-	result["summary"] = summarizeGenericMCPPayload(payload)
-	result["highlights"] = topLevelMCPKeys(payload)
-	result["truncated"] = len(fmt.Sprint(payload)) > 800
-	return result
-}
-
-func detectMCPChangeType(payload map[string]any) string {
-	if _, ok := payload["contents"]; ok {
-		return "resource_contents"
-	}
-	if _, ok := payload["resources"]; ok {
-		return "resource_list"
-	}
-	return "resource_update"
-}
-
-func summarizeMCPContents(contents []any) string {
-	if len(contents) == 0 {
-		return "empty resource payload"
-	}
-	first, _ := contents[0].(map[string]any)
-	if text, _ := first["text"].(string); strings.TrimSpace(text) != "" {
-		if mime, _ := first["mimeType"].(string); mime != "" {
-			return summarizeMIMEText(mime, text)
-		}
-		lines := strings.Split(strings.TrimSpace(text), "\n")
-		if len(lines) > 3 {
-			lines = lines[:3]
-		}
-		return truncate(strings.Join(lines, " | "), 240)
-	}
-	if blob, _ := first["blob"].(string); blob != "" {
-		return fmt.Sprintf("binary content (%d bytes base64)", len(blob))
-	}
-	if mime, _ := first["mimeType"].(string); mime != "" {
-		return "resource content with mime type " + mime
-	}
-	body, _ := json.Marshal(first)
-	return truncate(string(body), 240)
-}
-
-func extractMCPHighlights(contents []any) []string {
-	if len(contents) == 0 {
-		return nil
-	}
-	first, _ := contents[0].(map[string]any)
-	highlights := []string{}
-	if uri, _ := first["uri"].(string); uri != "" {
-		highlights = append(highlights, "uri="+uri)
-	}
-	if mime, _ := first["mimeType"].(string); mime != "" {
-		highlights = append(highlights, "mime="+mime)
-	}
-	if text, _ := first["text"].(string); text != "" {
-		highlights = append(highlights, fmt.Sprintf("chars=%d", len(text)))
-		lines := 1 + strings.Count(text, "\n")
-		highlights = append(highlights, fmt.Sprintf("lines=%d", lines))
-		if maybeJSONKeys := extractTopJSONKeys(text); len(maybeJSONKeys) > 0 {
-			highlights = append(highlights, "keys="+strings.Join(maybeJSONKeys, ","))
-		}
-		if mime, _ := first["mimeType"].(string); mime != "" {
-			highlights = append(highlights, mimeSpecificHighlight(mime, text)...)
-		}
-	}
-	return highlights
-}
-
-func summarizeMIMEText(mime, text string) string {
-	switch {
-	case strings.Contains(mime, "json"):
-		keys := extractTopJSONKeys(text)
-		if len(keys) > 0 {
-			return fmt.Sprintf("JSON content with keys: %s", strings.Join(keys, ", "))
-		}
-	case strings.Contains(mime, "markdown"):
-		lines := strings.Split(strings.TrimSpace(text), "\n")
-		headings := []string{}
-		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "#") {
-				headings = append(headings, strings.TrimSpace(line))
-			}
-			if len(headings) >= 3 {
-				break
-			}
-		}
-		if len(headings) > 0 {
-			return "Markdown headings: " + strings.Join(headings, " | ")
-		}
-	case strings.Contains(mime, "html"):
-		return "HTML content updated"
-	case strings.Contains(mime, "yaml"), strings.Contains(mime, "yml"):
-		return "YAML content updated"
-	case strings.Contains(mime, "xml"):
-		return "XML content updated"
-	}
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	if len(lines) > 3 {
-		lines = lines[:3]
-	}
-	return truncate(strings.Join(lines, " | "), 240)
-}
-
-func mimeSpecificHighlight(mime, text string) []string {
-	out := []string{}
-	switch {
-	case strings.Contains(mime, "json"):
-		if keys := extractTopJSONKeys(text); len(keys) > 0 {
-			out = append(out, "json_keys="+strings.Join(keys, ","))
-		}
-	case strings.Contains(mime, "markdown"):
-		out = append(out, fmt.Sprintf("headings=%d", strings.Count(text, "\n#")+btoi(strings.HasPrefix(strings.TrimSpace(text), "#"))))
-	case strings.Contains(mime, "html"):
-		out = append(out, fmt.Sprintf("tags~=%d", strings.Count(text, "<")))
-	}
-	return out
-}
-
-func btoi(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
-
-func isMCPContentTruncated(contents []any) bool {
-	if len(contents) == 0 {
-		return false
-	}
-	first, _ := contents[0].(map[string]any)
-	if text, _ := first["text"].(string); len(text) > 240 {
-		return true
-	}
-	if blob, _ := first["blob"].(string); len(blob) > 120 {
-		return true
-	}
-	return false
-}
-
-func summarizeGenericMCPPayload(payload map[string]any) string {
-	body, _ := json.Marshal(payload)
-	return truncate(string(body), 240)
-}
-
-func topLevelMCPKeys(payload map[string]any) []string {
-	keys := make([]string, 0, len(payload))
-	for key := range payload {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	if len(keys) > 8 {
-		keys = keys[:8]
-	}
-	return keys
-}
-
 func extractTopJSONKeys(text string) []string {
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(text), &obj); err != nil {
@@ -2119,90 +1905,6 @@ func (rt *Runtime) pruneHistory(sessionID string) {
 	}
 
 	rt.conversation.ReplaceMessages(sessionID, msgs)
-}
-
-func estimateTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	// Rough heuristic: ~4 chars per token for English-ish text.
-	return (len(text) + 3) / 4
-}
-
-func isToolLikeContent(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return false
-	}
-	if strings.Contains(trimmed, "```") {
-		return true
-	}
-	if strings.Contains(trimmed, "Output:") || strings.Contains(trimmed, "stdout:") {
-		return true
-	}
-	prefixes := []string{"Written ", "Created ", "Removed ", "Done ", "$ ", "Step: "}
-	for _, p := range prefixes {
-		if strings.Contains(trimmed, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func compactToolOutput(content string) string {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return trimmed
-	}
-	preview := trimmed
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-	return fmt.Sprintf("%s\n\n[Compacted tool output: original length %d chars]", preview, len(trimmed))
-}
-
-func hasToolParts(parts []sdk.MessagePart) bool {
-	for _, part := range parts {
-		if part.Type == "tool" {
-			return true
-		}
-	}
-	return false
-}
-
-func compactToolMessage(msg sdk.Message) sdk.Message {
-	msg.Content = compactToolOutput(msg.Content)
-	if len(msg.Parts) == 0 {
-		return msg
-	}
-	for i, part := range msg.Parts {
-		if part.Type != "tool" || part.Output == nil {
-			continue
-		}
-		part.Output = truncateOutputMap(part.Output)
-		msg.Parts[i] = part
-	}
-	return msg
-}
-
-func truncateOutputMap(output map[string]any) map[string]any {
-	const maxLen = 1000
-	const previewLen = 200
-	truncated := false
-	for k, v := range output {
-		str, ok := v.(string)
-		if !ok || len(str) <= maxLen {
-			continue
-		}
-		output[k] = truncate(str, previewLen)
-		truncated = true
-	}
-	if truncated {
-		if _, ok := output["truncated"]; !ok {
-			output["truncated"] = true
-		}
-	}
-	return output
 }
 
 func (rt *Runtime) compressHistory(ctx context.Context, sessionID string) {
@@ -3072,81 +2774,6 @@ func newLogger(cfg config.Config) (*zap.Logger, error) {
 	return zapCfg.Build()
 }
 
-type auditWriter struct {
-	mu   sync.Mutex
-	file *os.File
-}
-
-func newAuditWriter(path string) (*auditWriter, error) {
-	if path == "" {
-		return &auditWriter{}, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	return &auditWriter{file: file}, nil
-}
-
-func (w *auditWriter) Record(req sdk.PlanRequest, plan sdk.Plan, results []sdk.ToolResult) error {
-	if w == nil || w.file == nil {
-		return nil
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	for _, step := range plan.Steps {
-		var cmd string
-		if c, ok := step.Inputs["command"].(string); ok {
-			cmd = c
-		} else if p, ok := step.Inputs["path"].(string); ok {
-			cmd = step.Tool + " " + p
-		}
-
-		var output string
-		for _, r := range results {
-			if r.StepID == step.ID {
-				if r.Success && r.Data != nil {
-					if stdout, ok := r.Data["stdout"].(string); ok {
-						output = stdout
-					} else if content, ok := r.Data["content"].(string); ok {
-						output = content
-					}
-				}
-				if r.Error != "" {
-					output = "Error: " + r.Error
-				}
-				break
-			}
-		}
-
-		entry := map[string]any{
-			"ts":      time.Now().Format("2006-01-02 15:04:05"),
-			"tool":    step.Tool,
-			"command": cmd,
-			"output":  output,
-		}
-		data, err := json.Marshal(entry)
-		if err != nil {
-			return err
-		}
-		if _, err := w.file.Write(append(data, '\n')); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (w *auditWriter) Close() error {
-	if w == nil || w.file == nil {
-		return nil
-	}
-	return w.file.Close()
-}
-
 type Task struct {
 	ID          string           `json:"id"`
 	SessionID   string           `json:"session_id"`
@@ -3162,6 +2789,30 @@ type Task struct {
 }
 
 type TaskStatus string
+
+func runAttestationCheck(logger *zap.Logger) error {
+	attestor := attestation.NewAttestor(attestation.AttestationConfig{
+		TrustedChecksums:   map[string]string{},
+		RequireAttestation: false,
+	})
+	result, err := attestor.Attest()
+	if err != nil {
+		logger.Warn("attestation check failed", zap.Error(err))
+		return nil
+	}
+	if result.Valid {
+		logger.Info("attestation passed",
+			zap.String("type", string(result.AttestationType)),
+			zap.String("version", result.Version),
+		)
+	} else {
+		logger.Warn("attestation failed",
+			zap.String("type", string(result.AttestationType)),
+			zap.String("error", result.Error),
+		)
+	}
+	return nil
+}
 
 const (
 	TaskStatusPending   TaskStatus = "pending"
