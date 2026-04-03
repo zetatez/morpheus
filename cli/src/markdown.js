@@ -40,8 +40,10 @@ function highlightWithShiki(code, lang) {
       lang: lang || "text",
       theme: "github-dark",
     });
+    console.error("DEBUG shikiTokens:", JSON.stringify(result.tokens.slice(0, 6)));
     return result.tokens;
   } catch (e) {
+    console.error("Shiki error:", e?.message);
     return null;
   }
 }
@@ -451,18 +453,38 @@ function renderCodeBlock(out, lang, lines, colors) {
     const shikiTokens = highlightWithShiki(code, lang);
 
     if (shikiTokens) {
-      // Shiki highlighting: tokens is 2D array [line][token]
+      // Shiki: tokens is 2D array [line][token]
       for (let i = 0; i < shikiTokens.length; i++) {
-        out.push({ text: "  " });
-        for (const token of shikiTokens[i]) {
-          out.push({ text: token.content, fg: token.color || colors.code });
+        const lineTokens = shikiTokens[i];
+        if (lineTokens.length === 0) {
+          // Empty line - push indent only
+          out.push({ text: "  ", fg: colors.code });
+          continue;
         }
+        let lineText = "";
+        let currentFg = null;
+        let lineIndent = "  ";
+
+        for (const token of lineTokens) {
+          const tokenFg = token.color || colors.code;
+          if (currentFg === tokenFg) {
+            lineText += token.content;
+          } else {
+            if (currentFg !== null) {
+              out.push({ text: lineIndent + lineText, fg: currentFg });
+              lineIndent = "";
+            }
+            lineText = token.content;
+            currentFg = tokenFg;
+          }
+        }
+        out.push({ text: lineIndent + lineText, fg: currentFg || colors.code });
       }
     } else {
-      // Fall back to regex highlighter
-      const highlighted = highlightCodeFallback(code, lang);
-      for (const item of highlighted) {
-        out.push({ text: "  " + item.text, fg: item.fg });
+      // Fall back to no highlighting (line-by-line, single color)
+      // Regex highlighter doesn't preserve line boundaries, so we can't use it
+      for (const line of lines) {
+        out.push({ text: "  " + line, fg: colors.code });
       }
     }
   }
