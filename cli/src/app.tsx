@@ -20,6 +20,7 @@ import {
   type ApiResponse,
   type ConfirmationPayload,
   type StreamEvent,
+  type TeamTaskEvent,
   type TodoItem,
   type ToolResult,
   type PlanStep,
@@ -37,6 +38,7 @@ import { parseTranscriptToEntries } from "./transcript"
 import { theme } from "./theme"
 import { StatusBar, ChatEntries } from "./components/ChatComponents"
 import { TodoList } from "./components/TodoComponents"
+import { TeamTaskPanel } from "./components/TeamTaskComponents"
 import { Modal } from "./components/ModalComponent"
 
 type AppProps = {
@@ -123,9 +125,12 @@ export function App(props: AppProps) {
   const [serverMetrics, setServerMetrics] = createSignal<MetricsResponse | null>(null)
   const [currentModel, setCurrentModel] = createSignal<string>("")
   const [todoPulse, setTodoPulse] = createSignal(false)
+  const [activeTeamTasks, setActiveTeamTasks] = createSignal<TeamTaskEvent[]>([])
+  const [teamTaskPulse, setTeamTaskPulse] = createSignal(false)
   let monitorInterval: ReturnType<typeof setInterval> | undefined
   let metricsInterval: ReturnType<typeof setInterval> | undefined
   let todoPulseInterval: ReturnType<typeof setInterval> | undefined
+  let teamTaskPulseInterval: ReturnType<typeof setInterval> | undefined
   let abortController: AbortController | undefined
   let escapeTimeoutRef: ReturnType<typeof setTimeout> | undefined
   let inputQueue: { text: string; entryId: string }[] = []
@@ -708,6 +713,30 @@ export function App(props: AppProps) {
       }
       if (evt.event === "error") {
         appendEntry({ id: crypto.randomUUID(), role: "error", content: evt.data.error })
+        return
+      }
+      if (evt.event === "team_plan") {
+        const tasks = evt.data.tasks as TeamTaskEvent[]
+        if (tasks && tasks.length > 0) {
+          setActiveTeamTasks(tasks)
+          setTeamTaskPulse(true)
+        }
+        return
+      }
+      if (evt.event === "team_task_started" || evt.event === "team_task_finished" || evt.event === "team_task_error") {
+        const task = evt.data as TeamTaskEvent
+        setActiveTeamTasks(prev => {
+          const existing = prev.findIndex(t => t.id === task.id)
+          if (existing >= 0) {
+            const updated = [...prev]
+            updated[existing] = task
+            return updated
+          }
+          return [...prev, task]
+        })
+        if (evt.event === "team_task_finished" || evt.event === "team_task_error") {
+          setActiveRunBanner(evt.event === "team_task_error" ? `Task ${task.id} failed` : `Task ${task.id} completed`)
+        }
         return
       }
       if (evt.event === "done") {
@@ -1770,10 +1799,12 @@ export function App(props: AppProps) {
     }
     initMetrics()
     todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700)
+    teamTaskPulseInterval = setInterval(() => setTeamTaskPulse((value) => !value), 700)
 
     onCleanup(() => {
       if (metricsInterval) clearInterval(metricsInterval)
       if (todoPulseInterval) clearInterval(todoPulseInterval)
+      if (teamTaskPulseInterval) clearInterval(teamTaskPulseInterval)
     })
   })
 
@@ -1786,7 +1817,8 @@ export function App(props: AppProps) {
   const height = createMemo(() => terminal().height)
   const contentHeight = createMemo(() => Math.max(5, height() - 6))
   const todoPanelWidth = createMemo(() => activeTodos().length > 0 ? Math.min(42, Math.max(28, Math.floor(width() * 0.28))) : 0)
-  const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth()))
+  const teamTaskPanelWidth = createMemo(() => activeTeamTasks().length > 0 ? Math.min(48, Math.max(32, Math.floor(width() * 0.32))) : 0)
+  const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth() - teamTaskPanelWidth()))
 
   return (
     <box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
@@ -1810,6 +1842,14 @@ export function App(props: AppProps) {
             todos={activeTodos()}
             todoPulse={todoPulse()}
             panelWidth={todoPanelWidth()}
+            contentHeight={contentHeight()}
+          />
+        )}
+        {activeTeamTasks().length > 0 && (
+          <TeamTaskPanel
+            tasks={activeTeamTasks()}
+            taskPulse={teamTaskPulse()}
+            panelWidth={teamTaskPanelWidth()}
             contentHeight={contentHeight()}
           />
         )}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/zetatez/morpheus/internal/app/prompts"
 	"github.com/zetatez/morpheus/internal/exec"
 	"github.com/zetatez/morpheus/internal/plugin"
 	"github.com/zetatez/morpheus/pkg/sdk"
@@ -18,8 +19,9 @@ import (
 )
 
 const (
-	maxAgentSteps   = 12
-	maxHistoryTurns = 20
+	maxAgentSteps    = 12
+	maxHistoryTurns  = 20
+	defaultMaxTokens = 60000
 )
 
 type toolCall struct {
@@ -232,6 +234,10 @@ func (rt *Runtime) classifyIntent(ctx context.Context, sessionID string, input n
 	if trimmed == "" {
 		return intentClassification{Route: string(routeSimpleChat), Tags: []string{"social"}, SuggestedTools: []string{"none"}, Confidence: "high", Reason: "Empty input defaults to a simple conversational reply."}
 	}
+	if early := fastPathClassification(trimmed); early != nil {
+		rt.setCachedIntent(sessionID, strings.ToLower(trimmed), *early)
+		return *early
+	}
 	cacheKey := strings.ToLower(trimmed)
 	if cached, ok := rt.getCachedIntent(sessionID, cacheKey); ok {
 		rt.logger.Info("intent classification cache hit", zap.String("session", sessionID), zap.String("route", cached.Route), zap.Strings("tags", cached.Tags), zap.String("confidence", cached.Confidence), zap.String("input", trimmed))
@@ -254,6 +260,98 @@ func (rt *Runtime) classifyIntent(ctx context.Context, sessionID string, input n
 	normalized := normalizeIntentClassification(classified, trimmed)
 	rt.setCachedIntent(sessionID, cacheKey, normalized)
 	return normalized
+}
+
+func fastPathClassification(text string) *intentClassification {
+	lower := strings.ToLower(text)
+	if len(lower) < 20 {
+		if isGreeting(lower) {
+			return &intentClassification{Route: string(routeSimpleChat), Tags: []string{"social", "greeting"}, SuggestedTools: []string{"none"}, Confidence: "high", Reason: "Short greeting detected via fast path."}
+		}
+		if isThanks(lower) {
+			return &intentClassification{Route: string(routeSimpleChat), Tags: []string{"social", "thanks"}, SuggestedTools: []string{"none"}, Confidence: "high", Reason: "Short thanks detected via fast path."}
+		}
+		if isAffirmative(lower) || isNegative(lower) {
+			return &intentClassification{Route: string(routeLightweight), Tags: []string{"social", "confirm"}, SuggestedTools: []string{"none"}, Confidence: "high", Reason: "Short affirmation/negation detected via fast path."}
+		}
+	}
+	if hasFreshInfoKeywords(lower) {
+		return &intentClassification{Route: string(routeFreshInfo), Tags: []string{"fresh_info", "web"}, SuggestedTools: []string{"web"}, Confidence: "high", Reason: "Fresh info keywords detected via fast path."}
+	}
+	if hasCodeKeywords(lower) && !hasFileOperationKeywords(lower) {
+		return &intentClassification{Route: string(routeToolAgent), Tags: []string{"coding", "tooling"}, SuggestedTools: []string{"shell", "file_read"}, Confidence: "medium", Reason: "Code keywords detected via fast path."}
+	}
+	return nil
+}
+
+func isGreeting(s string) bool {
+	greetings := []string{"hi", "hello", "hey", "howdy", "greetings", "good morning", "good afternoon", "good evening", "what's up", "sup"}
+	for _, g := range greetings {
+		if strings.HasPrefix(s, g) || strings.HasSuffix(s, g) {
+			return true
+		}
+	}
+	return false
+}
+
+func isThanks(s string) bool {
+	thanks := []string{"thank", "thanks", "thx", "ty", "appreciate"}
+	for _, t := range thanks {
+		if strings.HasPrefix(s, t) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAffirmative(s string) bool {
+	yes := []string{"yes", "yeah", "yep", "sure", "okay", "ok", "do it", "go ahead", "please", "carry on", "continue", "proceed"}
+	for _, y := range yes {
+		if s == y || strings.HasPrefix(s, y+" ") || strings.HasPrefix(s, y+",") {
+			return true
+		}
+	}
+	return false
+}
+
+func isNegative(s string) bool {
+	no := []string{"no", "nope", "nah", "don't", "do not", "stop", "cancel", "abort", "never mind", "nevermind"}
+	for _, n := range no {
+		if s == n || strings.HasPrefix(s, n+" ") || strings.HasPrefix(s, n+",") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFreshInfoKeywords(s string) bool {
+	keywords := []string{"weather", "stock price", "news", "current time", "exchange rate", "currency", "bitcoin", "price of", "how is the", "what is the", ".com", ".org", "http", "latest"}
+	for _, k := range keywords {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCodeKeywords(s string) bool {
+	keywords := []string{"function", "class", "variable", "array", "loop", "debug", "error", "bug", "fix", "implement", "refactor", "test", "import", "export", "return", "if else", "for each", "while", "switch", "case", "try catch", "exception", "async", "await", "promise", "callback", "module", "package", "library", "framework"}
+	for _, k := range keywords {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFileOperationKeywords(s string) bool {
+	keywords := []string{"create file", "edit file", "read file", "write file", "delete file", "move file", "copy file", "rename", "mkdir", "rmdir", "chmod", "chown", "read", "write", "delete", "move", "copy", "open", "save", "find", "search", "grep", "glob", "tree", "ls", "cd ", "pwd", "cwd", "path", "directory", "folder"}
+	for _, k := range keywords {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseIntentClassification(content string) (intentClassification, error) {
@@ -450,7 +548,20 @@ func sortedToolNames(specs []map[string]any) []string {
 	return names
 }
 
-const toolSystemPrompt = `You are Morpheus, an autonomous coding assistant. Your job is to solve the user's problem in the fewest safe steps, with minimal back-and-forth.
+var toolSystemPrompt = buildToolSystemPrompt()
+
+func buildToolSystemPrompt() string {
+	if prompts.System == "" {
+		return fallbackToolSystemPrompt
+	}
+	return prompts.System + "\n\n## Skills\n\n" +
+		"### Coding (see coding.md)\n" + prompts.Coding + "\n\n" +
+		"### Debugging (see debug.md)\n" + prompts.Debug + "\n\n" +
+		"### Testing (see testing.md)\n" + prompts.Testing + "\n\n" +
+		"### Refactoring (see refactor.md)\n" + prompts.Refactor
+}
+
+const fallbackToolSystemPrompt = `You are Morpheus, an autonomous coding assistant. Your job is to solve the user's problem in the fewest safe steps, with minimal back-and-forth.
 
 ## Core Behavior
 - Be highly proactive: inspect the workspace, infer intent, choose reasonable defaults, and move forward without waiting.
@@ -926,16 +1037,29 @@ func mustJSONString(v any) string {
 }
 
 func formatToolPartContent(part sdk.MessagePart) string {
+	data := part.Output
+	if data != nil {
+		if truncated, ok := data["truncated"].(bool); ok && truncated {
+			if content, ok := data["content"].(string); ok && len(content) > 5000 {
+				data["content"] = truncateLines(content, 100)
+			}
+		}
+	}
 	payload := map[string]any{
 		"success": part.Status == "completed",
-		"data":    part.Output,
+		"data":    data,
 		"error":   part.Error,
 	}
-	data, err := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Sprintf("%v", payload)
 	}
-	return string(data)
+	result := string(jsonData)
+	if len(result) > 8000 {
+		preview := truncateLines(result, 150)
+		return preview + "\n\n[Tool output truncated to fit context window]"
+	}
+	return result
 }
 
 func calculateCost(promptTokens int, completionTokens int, model string, provider string) float64 {
@@ -980,4 +1104,87 @@ func extractStructuredOutput(calls []toolCall, structuredName string) (map[strin
 
 func outputPart(output map[string]any) sdk.MessagePart {
 	return sdk.MessagePart{Type: "text", Output: output}
+}
+
+func shouldTriggerCompaction(messages []map[string]any, maxTokens int) bool {
+	return estimateMessagesTokens(messages) > maxTokens
+}
+
+func pruneOldToolResults(messages []map[string]any, protectTokens int) []map[string]any {
+	if len(messages) < 3 {
+		return messages
+	}
+	var pruned int
+	var totalTokens int
+	type pruneItem struct {
+		msgIdx   int
+		partIdx  int
+		tokens   int
+		complete bool
+	}
+	var toPrune []pruneItem
+
+	for msgIdx := len(messages) - 1; msgIdx >= 0; msgIdx-- {
+		msg := messages[msgIdx]
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		turns := 0
+		for i := msgIdx - 1; i >= 0; i-- {
+			if r, _ := messages[i]["role"].(string); r == "user" {
+				turns++
+				break
+			}
+		}
+		if turns < 2 {
+			continue
+		}
+		toolCalls, _ := msg["tool_calls"].([]any)
+		for partIdx := len(toolCalls) - 1; partIdx >= 0; partIdx-- {
+			tc, ok := toolCalls[partIdx].(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, _ := tc["function"].(map[string]any)
+			if fn == nil {
+				continue
+			}
+			content := ""
+			if c, ok := tc["content"].(string); ok {
+				content = c
+			}
+			tokens := estimateTokens(content)
+			if tokens > 0 {
+				if totalTokens+tokens > protectTokens {
+					toPrune = append(toPrune, pruneItem{msgIdx, partIdx, tokens, false})
+					pruned += tokens
+				}
+				totalTokens += tokens
+			}
+		}
+	}
+
+	if pruned < 20000 {
+		return messages
+	}
+
+	result := make([]map[string]any, len(messages))
+	copy(result, messages)
+	for _, item := range toPrune {
+		if item.msgIdx >= len(result) {
+			continue
+		}
+		msg := result[item.msgIdx]
+		toolCalls, _ := msg["tool_calls"].([]any)
+		if item.partIdx >= len(toolCalls) {
+			continue
+		}
+		tc := toolCalls[item.partIdx].(map[string]any)
+		if content, ok := tc["content"].(string); ok && len(content) > 100 {
+			tc["content"] = truncateLines(content, 20)
+			tc["truncated"] = true
+		}
+	}
+	return result
 }

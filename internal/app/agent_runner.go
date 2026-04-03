@@ -174,7 +174,7 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 	if mode == AgentModePlan {
 		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": "Plan mode is read-only. If the user asks to execute commands or write files, respond with a plan first and ask them to switch to Build mode to apply changes."})
 	}
-	if summary, ok := rt.maybeCoordinate(ctx, sessionID, normalized.Text); ok {
+	if summary, ok := rt.maybeCoordinate(ctx, sessionID, normalized.Text, cb.emit); ok {
 		baseMessages = append(baseMessages, map[string]any{"role": "system", "content": summary})
 	}
 	if initialTodos := rt.planTodosFromInput(ctx, sessionID, normalized.Text); len(initialTodos) > 0 {

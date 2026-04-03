@@ -96,6 +96,11 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
+	rt.logger.Info("MiniMax request",
+		zap.String("endpoint", endpoint),
+		zap.Any("payload", payload),
+		zap.Any("provider", plannerCfg.Provider))
+
 	switch plannerCfg.Provider {
 	case "openai", "glm", "deepseek", "anthropic", "openrouter", "groq", "mistral", "togetherai", "perplexity":
 		httpReq.Header.Set("Authorization", "Bearer "+plannerCfg.APIKey)

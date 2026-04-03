@@ -274,6 +274,17 @@ export function createClient(baseUrl: string) {
   }
 }
 
+export type TeamTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled"
+
+export type TeamTaskEvent = {
+  id: string
+  role: string
+  prompt: string
+  status: TeamTaskStatus
+  summary?: string
+  error?: string
+}
+
 export type StreamEvent =
   | { event: "run_event"; data: { run_id: string; seq: number; type: string; data?: Record<string, unknown> } }
   | { event: "assistant_delta"; data: { text: string } }
@@ -282,6 +293,10 @@ export type StreamEvent =
   | { event: "confirmation"; data: ConfirmationPayload }
   | { event: "error"; data: { error: string } }
   | { event: "done"; data: ApiResponse }
+  | { event: "team_plan"; data: { summary: string; tasks: TeamTaskEvent[] } }
+  | { event: "team_task_started"; data: TeamTaskEvent }
+  | { event: "team_task_finished"; data: TeamTaskEvent }
+  | { event: "team_task_error"; data: TeamTaskEvent }
 
 export async function streamRunEvents(
   baseUrl: string,

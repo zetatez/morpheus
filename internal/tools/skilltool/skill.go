@@ -25,8 +25,7 @@ func New(loader *skill.Loader, allow func(context.Context, string, string) error
 func (t *Tool) Name() string { return "skill.invoke" }
 
 func (t *Tool) Describe() string {
-	skills := t.listSkillsForDescription()
-	return fmt.Sprintf("Invoke a configured local skill by name. Available skills:\n%s", skills)
+	return "Query or invoke a local skill by name. Use name+input to invoke directly, or query to search skills. Skills: " + t.listSkillNames()
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -38,6 +37,22 @@ func (t *Tool) Schema() map[string]any {
 			"input": map[string]any{"type": "object"},
 		},
 	}
+}
+
+func (t *Tool) listSkillNames() string {
+	if t.loader == nil {
+		return "<none>"
+	}
+	_ = t.loader.Load(context.Background())
+	skills := t.loader.List()
+	if len(skills) == 0 {
+		return "<none>"
+	}
+	var names []string
+	for _, s := range skills {
+		names = append(names, s.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func (t *Tool) listSkillsForDescription() string {

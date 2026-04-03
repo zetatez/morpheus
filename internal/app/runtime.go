@@ -24,6 +24,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/zetatez/morpheus/internal/app/prompts"
 	"github.com/zetatez/morpheus/internal/attestation"
 	"github.com/zetatez/morpheus/internal/config"
 	"github.com/zetatez/morpheus/internal/configstore"
@@ -144,6 +145,17 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 
 	if err := runAttestationCheck(logger); err != nil {
 		return nil, err
+	}
+
+	if err := prompts.Load(); err != nil {
+		logger.Warn("failed to load prompts", zap.Error(err))
+	} else {
+		logger.Info("prompts loaded",
+			zap.Int("system", len(prompts.System)),
+			zap.Int("coding", len(prompts.Coding)),
+			zap.Int("debug", len(prompts.Debug)),
+			zap.Int("testing", len(prompts.Testing)),
+			zap.Int("refactor", len(prompts.Refactor)))
 	}
 
 	conv := convo.NewManager()

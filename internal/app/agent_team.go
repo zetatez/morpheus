@@ -182,7 +182,7 @@ func (rt *Runtime) registerTeamTask(ctx context.Context, sessionID string, task 
 	team.SharedNote = rt.renderTeamSharedContextLocked(team)
 }
 
-func (rt *Runtime) startTeamTask(ctx context.Context, sessionID string, task coordinatorTask, memberSessionID string) {
+func (rt *Runtime) startTeamTask(ctx context.Context, sessionID string, task coordinatorTask, memberSessionID string, emit replEmitter) {
 	team := rt.teamFromContext(ctx, sessionID)
 	team.mu.Lock()
 	defer team.mu.Unlock()
@@ -193,17 +193,27 @@ func (rt *Runtime) startTeamTask(ctx context.Context, sessionID string, task coo
 	team.Members[task.ID] = teamMemberState{ID: task.ID, Role: task.Role, SessionID: memberSessionID, UpdatedAt: time.Now().UTC()}
 	team.Messages = append(team.Messages, teamMessage{ID: uuid.NewString(), From: "coordinator", To: task.ID, Kind: "task_assignment", ThreadID: task.ID, Content: task.Prompt, CreatedAt: time.Now().UTC()})
 	team.SharedNote = rt.renderTeamSharedContextLocked(team)
+	if emit != nil {
+		_ = emit("team_task_started", TeamTaskEvent{
+			ID:     task.ID,
+			Role:   task.Role,
+			Prompt: task.Prompt,
+			Status: "running",
+		})
+	}
 }
 
-func (rt *Runtime) finishTeamTask(ctx context.Context, sessionID string, task coordinatorTask, summary string, err error) {
+func (rt *Runtime) finishTeamTask(ctx context.Context, sessionID string, task coordinatorTask, summary string, err error, emit replEmitter) {
 	team := rt.teamFromContext(ctx, sessionID)
 	team.mu.Lock()
 	defer team.mu.Unlock()
 	state := team.Tasks[task.ID]
 	state.Status = "completed"
+	status := "completed"
 	if err != nil {
 		state.Status = "failed"
 		state.Error = err.Error()
+		status = "failed"
 	}
 	state.Summary = strings.TrimSpace(summary)
 	state.UpdatedAt = time.Now().UTC()
@@ -214,6 +224,20 @@ func (rt *Runtime) finishTeamTask(ctx context.Context, sessionID string, task co
 	}
 	team.Messages = append(team.Messages, teamMessage{ID: uuid.NewString(), From: task.ID, To: "coordinator", Kind: "task_result", ThreadID: task.ID, Content: content, CreatedAt: time.Now().UTC()})
 	team.SharedNote = rt.renderTeamSharedContextLocked(team)
+	if emit != nil {
+		eventType := "team_task_finished"
+		if status == "failed" {
+			eventType = "team_task_error"
+		}
+		_ = emit(eventType, TeamTaskEvent{
+			ID:      task.ID,
+			Role:    task.Role,
+			Prompt:  task.Prompt,
+			Status:  status,
+			Summary: strings.TrimSpace(summary),
+			Error:   state.Error,
+		})
+	}
 }
 
 func (rt *Runtime) renderTeamSharedContext(sessionID string) string {
