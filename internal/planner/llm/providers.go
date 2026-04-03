@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +57,11 @@ func (p *OpenAIProvider) ID() string { return "openai" }
 func (p *OpenAIProvider) Capabilities() []string { return []string{"fs", "cmd", "search", "edit"} }
 
 type MiniMaxProvider struct {
-	*BasePlanner
+	apiKey     string
+	model      string
+	temp       float64
+	endpoint   string
+	httpClient *http.Client
 }
 
 func NewMiniMaxProvider(config PlannerProviderConfig) (Planner, error) {
@@ -65,21 +70,18 @@ func NewMiniMaxProvider(config PlannerProviderConfig) (Planner, error) {
 	}
 	model := config.Model
 	if model == "" {
-		model = "abab6.5s-chat"
+		model = "MiniMax-M2.7"
 	}
 	endpoint := config.Endpoint
 	if endpoint == "" {
-		endpoint = "https://api.minimaxi.com/anthropic/v1/messages"
-	}
-	headers := map[string]string{
-		"x-api-key":         config.APIKey,
-		"anthropic-version": "2023-06-01",
-	}
-	for k, v := range config.ExtraHeaders {
-		headers[k] = v
+		endpoint = "https://api.minimax.chat/v1"
 	}
 	return &MiniMaxProvider{
-		BasePlanner: NewBasePlanner("", model, config.Temperature, endpoint, headers),
+		apiKey:     config.APIKey,
+		model:      model,
+		temp:       config.Temperature,
+		endpoint:   endpoint,
+		httpClient: &http.Client{},
 	}, nil
 }
 
@@ -98,13 +100,10 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 	systemPrompt := p.GetSystemPrompt()
 
 	payload := map[string]any{
-		"model": p.model,
-		"messages": []map[string]any{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-		"temperature": p.temp,
-		"max_tokens":  4096,
+		"model":              p.model,
+		"messages":           []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": userPrompt}},
+		"temperature":        p.temp,
+		"tokens_to_generate": 4096,
 	}
 
 	body, err := json.Marshal(payload)
@@ -112,13 +111,13 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 		return sdk.Plan{}, err
 	}
 
-	url := p.endpoint + "?GroupId=" + p.apiKey
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/v1/text/chatcompletion_v2", bytes.NewReader(body))
 	if err != nil {
 		return sdk.Plan{}, err
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -135,11 +134,33 @@ func (p *MiniMaxProvider) Plan(ctx context.Context, req sdk.PlanRequest) (sdk.Pl
 		return sdk.Plan{}, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	content, err := p.parseResponse(respBody)
-	if err != nil {
+	var raw struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+				Role    string `json:"role"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Error struct {
+			Code    int    `json:"status_code"`
+			Message string `json:"status_msg"`
+		} `json:"base_resp"`
+	}
+
+	if err := json.Unmarshal(respBody, &raw); err != nil {
 		return sdk.Plan{}, err
 	}
 
+	if raw.Error.Code != 0 {
+		return sdk.Plan{}, fmt.Errorf("minimax error (%d): %s", raw.Error.Code, raw.Error.Message)
+	}
+
+	if len(raw.Choices) == 0 {
+		return sdk.Plan{}, fmt.Errorf("no response choices")
+	}
+
+	content := raw.Choices[0].Message.Content
 	return p.parsePlanResponse(content)
 }
 
@@ -151,6 +172,77 @@ func (p *MiniMaxProvider) parseResponse(body []byte) (string, error) {
 		return "", err
 	}
 	return result.Content, nil
+}
+
+func (p *MiniMaxProvider) GetSystemPrompt() string {
+	return `You are Morpheus, an autonomous coding assistant. Your goal is to complete tasks efficiently with minimal user interaction.
+
+## Operating Principles
+- Think independently and make decisions without asking the user
+- If unsure about a non-critical detail, choose a safe default and proceed
+- Never ask for confirmation on safe, reversible operations - just do them
+- Only ask the user when you have exhausted all options and cannot proceed
+- Keep responses brief and direct
+
+## Workflow
+1. Understand the task fully before planning
+2. Use the right tool for each operation
+3. Execute efficiently - typically 1-3 steps per task
+4. Output results directly, avoid unnecessary echo steps
+
+## Tool Selection
+- agent.run: Delegate isolated research or sub-tasks
+- fs.read: Read files by range (path required, offset/limit optional)
+- fs.write: Create/update files (path + content required)
+- fs.edit: Precise string replacement edits
+- fs.glob: Match file paths (pattern required)
+- fs.grep: Search patterns in files
+- lsp.query: Code navigation, definitions, references, hover, diagnostics, rename, code actions
+- mcp.query: MCP server operations
+- skill.invoke: Invoke local skills when user explicitly asks
+- cmd.exec: Shell commands
+
+## Best Practices
+- Combine related commands: "cd dir && ls" or "grep pattern file | head -20"
+- Verify paths with fs.glob before fs.read
+- Use fs.grep first, then fs.read with offset/limit for relevant lines only
+- Keep fs.read limit small (never exceed 400 lines)
+- Prefer fs.edit for precise changes; use fs.write only for full-file creation
+- Use lsp.query for code navigation before grep-based guesses
+
+## Output Format (valid JSON only):
+{"summary": "1-2 line summary", "steps": [{"description": "action description", "tool": "tool name", "inputs": {"key": "value"}}], "risks": []}`
+}
+
+func (p *MiniMaxProvider) parsePlanResponse(content string) (sdk.Plan, error) {
+	var plan struct {
+		Summary string `json:"summary"`
+		Steps   []struct {
+			Description string         `json:"description"`
+			Tool        string         `json:"tool"`
+			Inputs      map[string]any `json:"inputs"`
+		} `json:"steps"`
+		Risks []string `json:"risks"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &plan); err != nil {
+		return sdk.Plan{}, fmt.Errorf("failed to parse plan response: %v", err)
+	}
+
+	var steps []sdk.PlanStep
+	for _, s := range plan.Steps {
+		steps = append(steps, sdk.PlanStep{
+			Description: s.Description,
+			Tool:        s.Tool,
+			Inputs:      s.Inputs,
+		})
+	}
+
+	return sdk.Plan{
+		Summary: plan.Summary,
+		Steps:   steps,
+		Risks:   plan.Risks,
+	}, nil
 }
 
 func (p *MiniMaxProvider) Capabilities() []string { return []string{"fs", "cmd", "search", "edit"} }

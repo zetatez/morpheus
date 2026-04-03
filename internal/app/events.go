@@ -1,11 +1,21 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
+
+	fstool "github.com/zetatez/morpheus/internal/tools/fs"
 )
 
 type globalEvent struct {
@@ -250,8 +260,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Get task",
 					"operationId": "getTask",
-					"parameters": []map[string]string{
-						{"name": "id", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Task details"},
@@ -260,8 +270,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"delete": map[string]interface{}{
 					"summary":     "Cancel task",
 					"operationId": "cancelTask",
-					"parameters": []map[string]string{
-						{"name": "id", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Task cancelled"},
@@ -281,8 +291,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Get session",
 					"operationId": "getSession",
-					"parameters": []map[string]string{
-						{"name": "id", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Session details"},
@@ -291,11 +301,57 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"delete": map[string]interface{}{
 					"summary":     "Delete session",
 					"operationId": "deleteSession",
-					"parameters": []map[string]string{
-						{"name": "id", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Session deleted"},
+					},
+				},
+			},
+			"/api/v1/sessions/{id}/fork": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Fork session",
+					"operationId": "forkSession",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"201": map[string]interface{}{"description": "Session forked"},
+					},
+				},
+			},
+			"/api/v1/sessions/{id}/share": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Share session",
+					"operationId": "shareSession",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Session shared"},
+					},
+				},
+				"delete": map[string]interface{}{
+					"summary":     "Unshare session",
+					"operationId": "unshareSession",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Session unshared"},
+					},
+				},
+			},
+			"/api/v1/sessions/{id}/summarize": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary":     "Summarize session",
+					"operationId": "summarizeSession",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
+					},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Session summary"},
 					},
 				},
 			},
@@ -312,8 +368,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]interface{}{
 					"summary":     "Load skill",
 					"operationId": "loadSkill",
-					"parameters": []map[string]string{
-						{"name": "name", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Skill loaded"},
@@ -351,8 +407,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Get run",
 					"operationId": "getRun",
-					"parameters": []map[string]string{
-						{"name": "id", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Run details"},
@@ -372,8 +428,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Read remote file",
 					"operationId": "readRemoteFile",
-					"parameters": []map[string]string{
-						{"name": "path", "in": "query", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "path", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "File content"},
@@ -478,8 +534,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]interface{}{
 					"summary":     "Reply to permission request",
 					"operationId": "replyPermission",
-					"parameters": []map[string]string{
-						{"name": "requestID", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "requestID", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"requestBody": map[string]interface{}{
 						"required": true,
@@ -488,7 +544,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 								"schema": map[string]interface{}{
 									"type": "object",
 									"properties": map[string]interface{}{
-										"reply": map[string]string{"type": "string", "enum": {"allow", "deny"}},
+										"reply": map[string]string{"type": "string", "enum": "allow,deny"},
 									},
 								},
 							},
@@ -518,7 +574,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 									"type": "object",
 									"properties": map[string]interface{}{
 										"name":      map[string]string{"type": "string"},
-										"transport": map[string]string{"type": "string", "enum": {"stdio", "http", "sse"}},
+										"transport": map[string]string{"type": "string"},
 										"command":   map[string]string{"type": "string"},
 										"url":       map[string]string{"type": "string"},
 									},
@@ -535,8 +591,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]interface{}{
 					"summary":     "Connect MCP server",
 					"operationId": "connectMCPServer",
-					"parameters": []map[string]string{
-						{"name": "name", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Connected"},
@@ -547,8 +603,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]interface{}{
 					"summary":     "Disconnect MCP server",
 					"operationId": "disconnectMCPServer",
-					"parameters": []map[string]string{
-						{"name": "name", "in": "path", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Disconnected"},
@@ -559,8 +615,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Text search",
 					"operationId": "textSearch",
-					"parameters": []map[string]string{
-						{"name": "pattern", "in": "query", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "pattern", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
 						{"name": "path", "in": "query", "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
@@ -572,8 +628,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "File search",
 					"operationId": "fileSearch",
-					"parameters": []map[string]string{
-						{"name": "query", "in": "query", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "query", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
 						{"name": "limit", "in": "query", "schema": map[string]string{"type": "integer"}},
 					},
 					"responses": map[string]interface{}{
@@ -585,8 +641,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Symbol search",
 					"operationId": "symbolSearch",
-					"parameters": []map[string]string{
-						{"name": "query", "in": "query", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "query", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "Symbol results"},
@@ -597,7 +653,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "List files",
 					"operationId": "listFiles",
-					"parameters": []map[string]string{
+					"parameters": []map[string]interface{}{
 						{"name": "path", "in": "query", "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
@@ -609,8 +665,8 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 				"get": map[string]interface{}{
 					"summary":     "Read file content",
 					"operationId": "readFileContent",
-					"parameters": []map[string]string{
-						{"name": "path", "in": "query", "required": "true", "schema": map[string]string{"type": "string"}},
+					"parameters": []map[string]interface{}{
+						{"name": "path", "in": "query", "required": true, "schema": map[string]string{"type": "string"}},
 					},
 					"responses": map[string]interface{}{
 						"200": map[string]interface{}{"description": "File content"},
@@ -775,9 +831,10 @@ func (s *APIServer) handlePermissionReply(w http.ResponseWriter, r *http.Request
 	}
 
 	allow := strings.ToLower(strings.TrimSpace(body.Reply)) == "allow"
-	if err := s.runtime.handlePendingConfirmation(requestID, allow); err != nil {
+	_, exists := s.runtime.pendingConfirmations.LoadAndDelete(requestID)
+	if !exists {
 		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "pending confirmation not found"})
 		return
 	}
 
@@ -912,18 +969,12 @@ func (s *APIServer) handleFind(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) doGrep(rootDir, pattern string) ([]map[string]interface{}, error) {
 	var results []map[string]interface{}
 
-	type grepResult struct {
-		File string `json:"file"`
-		Line string `json:"line"`
-		Text string `json:"text"`
-	}
-
 	cmd := exec.Command("grep", "-rn", "--include=*.go", "--include=*.ts", "--include=*.js", "--include=*.py", "--include=*.md", pattern, rootDir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	_ = cmd.Run()
 	output := stdout.String()
 	if output != "" {
 		lines := strings.Split(output, "\n")
@@ -943,7 +994,6 @@ func (s *APIServer) doGrep(rootDir, pattern string) ([]map[string]interface{}, e
 	}
 
 	_ = stderr.String()
-	_ = err
 
 	return results, nil
 }
@@ -984,15 +1034,13 @@ func (s *APIServer) doFileSearch(query string, limit int) ([]string, error) {
 	cmd := exec.Command("find", s.runtime.cfg.WorkspaceRoot, "-type", "f", "-name", "*"+query+"*")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	err := cmd.Run()
+	_ = cmd.Run()
 
 	results := []string{}
-	if err == nil {
-		lines := strings.Split(stdout.String(), "\n")
-		for _, line := range lines {
-			if line != "" && len(results) < limit {
-				results = append(results, line)
-			}
+	lines := strings.Split(stdout.String(), "\n")
+	for _, line := range lines {
+		if line != "" && len(results) < limit {
+			results = append(results, line)
 		}
 	}
 
@@ -1027,23 +1075,21 @@ func (s *APIServer) doSymbolSearch(query string) ([]map[string]interface{}, erro
 	grepCmd := exec.Command("grep", "-rn", "-E", "^(func |type |struct |interface |const |var )\\s*"+query, s.runtime.cfg.WorkspaceRoot)
 	var stdout bytes.Buffer
 	grepCmd.Stdout = &stdout
-	err := grepCmd.Run()
+	_ = grepCmd.Run()
 
 	results := []map[string]interface{}{}
-	if err == nil {
-		lines := strings.Split(stdout.String(), "\n")
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			parts := strings.SplitN(line, ":", 3)
-			if len(parts) >= 3 {
-				results = append(results, map[string]interface{}{
-					"file": parts[0],
-					"line": parts[1],
-					"text": parts[2],
-				})
-			}
+	lines := strings.Split(stdout.String(), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) >= 3 {
+			results = append(results, map[string]interface{}{
+				"file": parts[0],
+				"line": parts[1],
+				"text": parts[2],
+			})
 		}
 	}
 
@@ -1142,20 +1188,10 @@ func (s *APIServer) handleFileStatus(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	_ = cmd.Run()
 	status := stdout.String()
 
 	w.Header().Set("Content-Type", "application/json")
-	if err != nil {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":  err.Error(),
-			"status": "",
-			"raw":    stderr.String(),
-		})
-		return
-	}
-
-	_ = stderr.String()
 
 	changed := []map[string]string{}
 	lines := strings.Split(status, "\n")
@@ -1167,6 +1203,8 @@ func (s *APIServer) handleFileStatus(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+
+	_ = stderr.String()
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"changed": changed,
