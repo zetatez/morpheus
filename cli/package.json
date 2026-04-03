@@ -19,6 +19,7 @@
     "yargs": "*"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
     "tsx": "*",
     "typescript": "*"
   }
