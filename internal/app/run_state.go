@@ -482,7 +482,7 @@ func (rt *Runtime) replayRunEvents(ctx context.Context, runID string, afterSeq i
 }
 
 func (s *APIServer) handleRunByID(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/runs/")
+	path := strings.TrimPrefix(r.URL.Path, "/runs/")
 	if path == "" {
 		w.WriteHeader(http.StatusNotFound)
 		return

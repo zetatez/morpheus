@@ -203,23 +203,83 @@ morpheus serve --config path/to/config.yaml
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/chat` | Chat with agent |
-| POST | `/api/v1/plan` | Generate plan |
-| POST | `/api/v1/execute` | Execute plan |
-| POST | `/api/v1/tasks` | Create task |
-| GET | `/api/v1/tasks/{id}` | Get task status |
-| GET | `/api/v1/sessions` | List sessions |
-| GET | `/api/v1/sessions/{id}` | Get session |
-| GET | `/api/v1/skills` | List skills |
-| POST | `/api/v1/models/select` | Switch model |
-| GET | `/api/v1/models` | List models |
+| GET | `/health` | Health check |
+| GET | `/event` | SSE event stream |
+| GET | `/doc` | OpenAPI documentation |
+| GET | `/config/` | Get configuration |
+| PATCH | `/config/` | Update configuration |
+| POST | `/chat` | Chat with agent |
+| POST | `/plan` | Generate plan |
+| POST | `/execute` | Execute plan |
+| POST | `/tasks/` | Create task |
+| GET | `/tasks/{id}` | Get task status |
+| DELETE | `/tasks/{id}` | Cancel task |
+| GET | `/session/` | List sessions |
+| POST | `/session/` | Create session |
+| GET | `/session/status` | Get session status |
+| GET | `/session/{id}` | Get session |
+| PATCH | `/session/{id}` | Update session |
+| DELETE | `/session/{id}` | Delete session |
+| POST | `/session/{id}/fork` | Fork session |
+| POST | `/session/{id}/share` | Share session |
+| DELETE | `/session/{id}/share` | Unshare session |
+| POST | `/session/{id}/summarize` | Summarize session |
+| POST | `/session/{id}/abort` | Abort session |
+| POST | `/session/{id}/revert` | Revert message |
+| POST | `/session/{id}/unrevert` | Unrevert message |
+| GET | `/session/{id}/children` | Get child sessions |
+| GET | `/session/{id}/todo` | Get session todos |
+| POST | `/session/{id}/init` | Initialize session |
+| GET | `/session/{id}/message` | Get session messages |
+| POST | `/session/{id}/message` | Send message |
+| GET | `/session/{id}/message/{messageID}` | Get single message |
+| DELETE | `/session/{id}/message/{messageID}` | Delete message |
+| PATCH | `/session/{id}/message/{messageID}/part/{partID}` | Update message part |
+| DELETE | `/session/{id}/message/{messageID}/part/{partID}` | Delete message part |
+| GET | `/session/{id}/diff` | Get message diff |
+| POST | `/session/{id}/command` | Send command |
+| POST | `/session/{id}/shell` | Run shell command |
+| GET | `/skill/` | List skills |
+| POST | `/skill/{name}` | Load skill |
+| GET | `/models/` | List models |
+| POST | `/models/select` | Switch model |
+| GET | `/runs/` | List runs |
+| GET | `/runs/{id}` | Get run |
+| GET | `/metrics` | Server metrics |
+| GET | `/provider/` | List AI providers |
+| GET | `/provider/auth` | Get auth methods |
+| GET | `/permission/` | List pending permissions |
+| POST | `/permission/{id}/reply` | Reply to permission |
+| GET | `/question/` | List pending questions |
+| POST | `/question/{id}/reply` | Reply to question |
+| POST | `/question/{id}/reject` | Reject question |
+| GET | `/mcp/` | List MCP servers |
+| POST | `/mcp/` | Add MCP server |
+| POST | `/mcp/{name}/connect` | Connect MCP |
+| POST | `/mcp/{name}/disconnect` | Disconnect MCP |
+| GET | `/find` | Text search |
+| GET | `/find/file` | File search |
+| GET | `/find/symbol` | Symbol search |
+| GET | `/file` | List files |
+| GET | `/file/content` | Read file content |
+| GET | `/file/status` | Git status |
+| GET | `/project/` | List projects |
+| GET | `/project/{id}` | Get project |
+| PATCH | `/project/{id}` | Update project |
+| GET | `/project/current` | Get current project |
+| POST | `/project/git/init` | Initialize git |
+| POST | `/shell` | Execute shell command |
+| GET | `/remote-file` | Read remote file |
+| POST | `/remote-file` | Write remote file |
+| GET | `/ssh-info` | SSH info |
+| GET | `/ws` | WebSocket endpoint |
 | POST | `/repl` | REPL endpoint |
 | POST | `/repl/stream` | Streaming REPL |
 
 ### Chat Example
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/chat \
+curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -d '{"session": "default", "input": "Hello"}'
 ```

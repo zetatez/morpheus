@@ -2883,12 +2883,12 @@ func (s *APIServer) registerRoutes() {
 	s.mux.HandleFunc("/shell", s.handleShell)
 	s.mux.HandleFunc("/event", s.handleGlobalEvent)
 	s.mux.HandleFunc("/doc", s.handleDoc)
-	s.mux.HandleFunc("/config", s.handleConfig)
-	s.mux.HandleFunc("/permission", s.handlePermission)
+	s.mux.HandleFunc("/config/", s.handleConfig)
+	s.mux.HandleFunc("/permission/", s.handlePermission)
 	s.mux.HandleFunc("/permission/", s.handlePermissionReply)
-	s.mux.HandleFunc("/question", s.handleQuestion)
+	s.mux.HandleFunc("/question/", s.handleQuestion)
 	s.mux.HandleFunc("/question/", s.handleQuestionReply)
-	s.mux.HandleFunc("/mcp", s.handleMCP)
+	s.mux.HandleFunc("/mcp/", s.handleMCP)
 	s.mux.HandleFunc("/mcp/", s.handleMCPConnect)
 	s.mux.HandleFunc("/find", s.handleFind)
 	s.mux.HandleFunc("/find/file", s.handleFindFile)
@@ -2896,28 +2896,22 @@ func (s *APIServer) registerRoutes() {
 	s.mux.HandleFunc("/file", s.handleFileList)
 	s.mux.HandleFunc("/file/content", s.handleFileContent)
 	s.mux.HandleFunc("/file/status", s.handleFileStatus)
-	s.mux.HandleFunc("/project", s.handleProject)
+	s.mux.HandleFunc("/project/", s.handleProjectByID)
 	s.mux.HandleFunc("/project/current", s.handleProjectCurrent)
 	s.mux.HandleFunc("/project/git/init", s.handleProjectGitInit)
-	s.mux.HandleFunc("/provider", s.handleProvider)
+	s.mux.HandleFunc("/provider/", s.handleProvider)
 	s.mux.HandleFunc("/provider/auth", s.handleProviderAuth)
-	s.mux.HandleFunc("/session/", s.handleSessionByID)
-	s.mux.HandleFunc("/session/", s.handleSessionAction)
-	s.mux.HandleFunc("/sessions", s.handleSessions)
-	s.mux.HandleFunc("/sessions/", s.handleSessionByID)
-	s.mux.HandleFunc("/sessions/", s.handleSessionAction)
+	s.mux.HandleFunc("/session/", s.handleSession)
+	s.mux.HandleFunc("/session/status", s.handleSessionStatus)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
-	s.mux.HandleFunc("/tasks", s.handleTasks)
-	s.mux.HandleFunc("/tasks/", s.handleTaskByID)
+	s.mux.HandleFunc("/tasks/", s.handleTasks)
 	s.mux.HandleFunc("/plan", s.wrapLimited("plan", s.handlePlan))
 	s.mux.HandleFunc("/execute", s.wrapLimited("execute", s.handleExecute))
 	s.mux.HandleFunc("/chat", s.wrapLimited("chat", s.handleChat))
-	s.mux.HandleFunc("/skills", s.handleSkills)
-	s.mux.HandleFunc("/skills/", s.handleSkillByName)
-	s.mux.HandleFunc("/models", s.handleModels)
+	s.mux.HandleFunc("/skill/", s.handleSkillByName)
+	s.mux.HandleFunc("/models/", s.handleModels)
 	s.mux.HandleFunc("/models/select", s.handleModelSelect)
-	s.mux.HandleFunc("/runs", s.handleRuns)
-	s.mux.HandleFunc("/runs/", s.handleRunByID)
+	s.mux.HandleFunc("/runs/", s.handleRuns)
 	s.mux.HandleFunc("/remote-file", s.handleRemoteFile)
 	s.mux.HandleFunc("/ssh-info", s.handleSSHInfo)
 	s.mux.HandleFunc("/ws", s.handleRemoteWS)
@@ -3383,7 +3377,7 @@ func (s *APIServer) handleTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
+	id := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	if id == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -3710,7 +3704,7 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
+	path := strings.TrimPrefix(r.URL.Path, "/session/")
 	if path == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -3839,15 +3833,30 @@ func (s *APIServer) handleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleSkillByName(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	name := strings.TrimPrefix(r.URL.Path, "/api/v1/skills/")
+	name := strings.TrimPrefix(r.URL.Path, "/skill/")
 	name = strings.TrimSuffix(name, "/load")
 	name = strings.Trim(name, "/")
+
 	if name == "" {
+		if r.Method == http.MethodGet {
+			s.ensureSkillsLoaded(r.Context())
+			query := strings.TrimSpace(r.URL.Query().Get("q"))
+			var skills []sdk.SkillMetadata
+			if query == "" {
+				skills = s.skills.List()
+			} else {
+				skills = s.skills.Search(query)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(SkillListResponse{Skills: skills, ActiveSkill: s.activeSkill})
+			return
+		}
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	s.ensureSkillsLoaded(r.Context())

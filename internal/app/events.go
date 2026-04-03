@@ -196,7 +196,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/chat": map[string]interface{}{
+			"/chat": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Chat with agent",
 					"operationId": "chat",
@@ -222,7 +222,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/plan": map[string]interface{}{
+			"/plan": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Generate plan",
 					"operationId": "createPlan",
@@ -231,7 +231,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/execute": map[string]interface{}{
+			"/execute": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Execute plan",
 					"operationId": "executePlan",
@@ -240,7 +240,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/tasks": map[string]interface{}{
+			"/tasks/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List tasks",
 					"operationId": "listTasks",
@@ -256,7 +256,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/tasks/{id}": map[string]interface{}{
+			"/tasks/{id}": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get task",
 					"operationId": "getTask",
@@ -278,7 +278,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/sessions": map[string]interface{}{
+			"/session/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List sessions",
 					"operationId": "listSessions",
@@ -287,7 +287,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/sessions/{id}": map[string]interface{}{
+			"/session/{id}": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get session",
 					"operationId": "getSession",
@@ -355,7 +355,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/skills": map[string]interface{}{
+			"/skill/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List skills",
 					"operationId": "listSkills",
@@ -364,7 +364,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/skills/{name}": map[string]interface{}{
+			"/skill/{name}": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Load skill",
 					"operationId": "loadSkill",
@@ -376,7 +376,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/models": map[string]interface{}{
+			"/models/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List models",
 					"operationId": "listModels",
@@ -385,7 +385,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/models/select": map[string]interface{}{
+			"/models/select": map[string]interface{}{
 				"post": map[string]interface{}{
 					"summary":     "Select model",
 					"operationId": "selectModel",
@@ -394,7 +394,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/runs": map[string]interface{}{
+			"/runs/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List runs",
 					"operationId": "listRuns",
@@ -403,7 +403,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/runs/{id}": map[string]interface{}{
+			"/runs/{id}": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get run",
 					"operationId": "getRun",
@@ -415,7 +415,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/metrics": map[string]interface{}{
+			"/metrics": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get server metrics",
 					"operationId": "getMetrics",
@@ -424,7 +424,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/remote-file": map[string]interface{}{
+			"/remote-file": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Read remote file",
 					"operationId": "readRemoteFile",
@@ -458,7 +458,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/ssh-info": map[string]interface{}{
+			"/ssh-info": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "Get SSH info",
 					"operationId": "getSSHInfo",
@@ -467,7 +467,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/api/v1/ws": map[string]interface{}{
+			"/ws": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "WebSocket endpoint",
 					"operationId": "websocket",
@@ -682,7 +682,7 @@ func (s *APIServer) handleDoc(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
-			"/project": map[string]interface{}{
+			"/project/": map[string]interface{}{
 				"get": map[string]interface{}{
 					"summary":     "List projects",
 					"operationId": "listProjects",
@@ -1291,6 +1291,26 @@ func (s *APIServer) handleSessionAction(w http.ResponseWriter, r *http.Request) 
 		s.handleSessionShare(w, r)
 	case strings.HasSuffix(path, "/summarize"):
 		s.handleSessionSummarize(w, r)
+	case strings.HasSuffix(path, "/children"):
+		s.handleSessionChildren(w, r)
+	case strings.HasSuffix(path, "/todo"):
+		s.handleSessionTodo(w, r)
+	case strings.HasSuffix(path, "/init"):
+		s.handleSessionInit(w, r)
+	case strings.HasSuffix(path, "/abort"):
+		s.handleSessionAbort(w, r)
+	case strings.HasSuffix(path, "/revert"):
+		s.handleSessionRevert(w, r)
+	case strings.HasSuffix(path, "/unrevert"):
+		s.handleSessionUnrevert(w, r)
+	case strings.HasSuffix(path, "/message"):
+		s.handleSessionMessage(w, r)
+	case strings.HasSuffix(path, "/diff"):
+		s.handleSessionDiff(w, r)
+	case strings.HasSuffix(path, "/command"):
+		s.handleSessionCommand(w, r)
+	case strings.HasSuffix(path, "/shell"):
+		s.handleSessionShell(w, r)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -1302,8 +1322,7 @@ func (s *APIServer) handleSessionFork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
-	sessionID = strings.TrimSuffix(sessionID, "/fork")
+	sessionID := extractSessionID(r.URL.Path)
 	if sessionID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
@@ -1323,8 +1342,7 @@ func (s *APIServer) handleSessionFork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleSessionShare(w http.ResponseWriter, r *http.Request) {
-	sessionID := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
-	sessionID = strings.TrimSuffix(sessionID, "/share")
+	sessionID := extractSessionID(r.URL.Path)
 
 	if r.Method == http.MethodDelete {
 		w.Header().Set("Content-Type", "application/json")
@@ -1342,7 +1360,7 @@ func (s *APIServer) handleSessionShare(w http.ResponseWriter, r *http.Request) {
 		"ok":         true,
 		"session_id": sessionID,
 		"shared":     true,
-		"share_url":  fmt.Sprintf("/api/v1/sessions/%s", sessionID),
+		"share_url":  fmt.Sprintf("/sessions/%s", sessionID),
 	})
 }
 
@@ -1352,8 +1370,7 @@ func (s *APIServer) handleSessionSummarize(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
-	sessionID = strings.TrimSuffix(sessionID, "/summarize")
+	sessionID := extractSessionID(r.URL.Path)
 	if sessionID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
@@ -1368,6 +1385,235 @@ func (s *APIServer) handleSessionSummarize(w http.ResponseWriter, r *http.Reques
 		"session_id": sessionID,
 		"summary":    summary,
 	})
+}
+
+func (s *APIServer) handleSession(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSessions(w, r)
+	case http.MethodPost:
+		s.handleSessionCreate(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
+	sessionID := "session-" + fmt.Sprintf("%d", time.Now().Unix())
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":         sessionID,
+		"session_id": sessionID,
+		"created_at": time.Now(),
+	})
+}
+
+func (s *APIServer) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "active",
+		"timestamp": time.Now(),
+	})
+}
+
+func (s *APIServer) handleProjectByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/project/")
+	parts := strings.Split(path, "/")
+	projectID := parts[0]
+
+	if projectID == "" {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"projects": []map[string]interface{}{
+					{
+						"id":         "default",
+						"name":       filepath.Base(s.runtime.cfg.WorkspaceRoot),
+						"path":       s.runtime.cfg.WorkspaceRoot,
+						"is_current": true,
+					},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "project_id is required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":         projectID,
+			"name":       projectID,
+			"path":       s.runtime.cfg.WorkspaceRoot,
+			"is_current": projectID == "default",
+		})
+	case http.MethodPatch:
+		var updates map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":      true,
+			"id":      projectID,
+			"updated": updates,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if strings.Contains(path, "/message/") {
+		s.handleSessionMessageByID(w, r)
+		return
+	}
+
+	sessionID := extractSessionIDFromPath(path, "/session/", "/message")
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSessionMessageList(w, r, sessionID)
+	case http.MethodPost:
+		s.handleSessionMessageSend(w, r, sessionID)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleSessionMessageByID(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/message/")
+	if len(parts) < 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid path"})
+		return
+	}
+
+	sessionMsgPart := parts[1]
+	msgParts := strings.SplitN(sessionMsgPart, "/", 2)
+	messageID := msgParts[0]
+
+	sessionID := extractSessionIDFromPath(parts[0], "/session/", "")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"session_id": sessionID,
+			"message_id": messageID,
+		})
+	case http.MethodDelete:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":         true,
+			"session_id": sessionID,
+			"message_id": messageID,
+			"deleted":    true,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleSessionMessagePart(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/message/")
+	if len(parts) < 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	msgPart := parts[1]
+	msgParts := strings.SplitN(msgPart, "/part/", 2)
+	if len(msgParts) < 2 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	messageID := msgParts[0]
+	partID := msgParts[1]
+	sessionID := extractSessionIDFromPath(parts[0], "/session/", "")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	switch r.Method {
+	case http.MethodPatch:
+		var body struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":         true,
+			"session_id": sessionID,
+			"message_id": messageID,
+			"part_id":    partID,
+			"type":       body.Type,
+			"text":       body.Text,
+		})
+	case http.MethodDelete:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":         true,
+			"session_id": sessionID,
+			"message_id": messageID,
+			"part_id":    partID,
+			"deleted":    true,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func extractSessionIDFromPath(path, prefix, suffix string) string {
+	if idx := strings.Index(path, prefix); idx == 0 {
+		sessionID := strings.TrimPrefix(path, prefix)
+		if suffix != "" {
+			sessionID = strings.TrimSuffix(sessionID, suffix)
+			sessionID = strings.TrimSuffix(sessionID, "/")
+		}
+		parts := strings.SplitN(sessionID, "/", 2)
+		return parts[0]
+	}
+	return ""
+}
+
+func extractSessionID(path string) string {
+	paths := []string{"/session/", "/session/"}
+	for _, prefix := range paths {
+		if idx := strings.Index(path, prefix); idx == 0 {
+			sessionID := strings.TrimPrefix(path, prefix)
+			parts := strings.Split(sessionID, "/")
+			return parts[0]
+		}
+	}
+	return ""
 }
 
 func (s *APIServer) handleQuestion(w http.ResponseWriter, r *http.Request) {
@@ -1508,7 +1754,7 @@ func (s *APIServer) handleSessionChildren(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/children")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1528,7 +1774,7 @@ func (s *APIServer) handleSessionTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/todo")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1548,7 +1794,7 @@ func (s *APIServer) handleSessionInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/init")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1575,7 +1821,7 @@ func (s *APIServer) handleSessionAbort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/abort")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1607,7 +1853,7 @@ func (s *APIServer) handleSessionRevert(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/revert")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1634,7 +1880,7 @@ func (s *APIServer) handleSessionUnrevert(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/unrevert")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1653,24 +1899,6 @@ func (s *APIServer) handleSessionUnrevert(w http.ResponseWriter, r *http.Request
 		"session_id": sessionID,
 		"unreverted": true,
 	})
-}
-
-func (s *APIServer) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
-	sessionID = strings.TrimSuffix(sessionID, "/message")
-	if sessionID == "" {
-		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
-		sessionID = strings.TrimSuffix(sessionID, "/message")
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		s.handleSessionMessageList(w, r, sessionID)
-	case http.MethodPost:
-		s.handleSessionMessageSend(w, r, sessionID)
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
 }
 
 func (s *APIServer) handleSessionMessageList(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -1719,7 +1947,7 @@ func (s *APIServer) handleSessionDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/diff")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1742,7 +1970,7 @@ func (s *APIServer) handleSessionCommand(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/command")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
@@ -1772,7 +2000,7 @@ func (s *APIServer) handleSessionShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID := strings.TrimPrefix(r.URL.Path, "/session/")
 	sessionID = strings.TrimSuffix(sessionID, "/shell")
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")

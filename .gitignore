@@ -1,0 +1,24 @@
+# Binaries
+morpheus
+*.exe
+
+# CLI
+cli/node_modules/
+cli/dist/
+cli/.bun/
+
+# VSCode extension
+extensions/vscode/out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
