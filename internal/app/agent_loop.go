@@ -841,6 +841,8 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 			payload["tools"] = tools
 			if toolChoice != nil {
 				payload["tool_choice"] = toolChoice
+			} else if plannerCfg.Provider == "minimax" || plannerCfg.Provider == "minmax" {
+				payload["tool_choice"] = map[string]any{"type": "auto"}
 			} else {
 				payload["tool_choice"] = "auto"
 			}

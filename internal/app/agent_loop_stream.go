@@ -74,6 +74,8 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 		payload["tools"] = tools
 		if toolChoice != nil {
 			payload["tool_choice"] = toolChoice
+		} else if plannerCfg.Provider == "minimax" || plannerCfg.Provider == "minmax" {
+			payload["tool_choice"] = map[string]any{"type": "auto"}
 		} else {
 			payload["tool_choice"] = "auto"
 		}
@@ -83,6 +85,10 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	if err != nil {
 		return chatResponse{}, err
 	}
+
+	rt.logger.Info("MiniMax request payload",
+		zap.String("provider", plannerCfg.Provider),
+		zap.ByteString("body", body))
 
 	endpoint := plannerCfg.Endpoint
 	if endpoint == "" {
@@ -95,11 +101,6 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-
-	rt.logger.Info("MiniMax request",
-		zap.String("endpoint", endpoint),
-		zap.Any("payload", payload),
-		zap.Any("provider", plannerCfg.Provider))
 
 	switch plannerCfg.Provider {
 	case "openai", "glm", "deepseek", "anthropic", "openrouter", "groq", "mistral", "togetherai", "perplexity":
