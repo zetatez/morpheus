@@ -1,6 +1,5 @@
 export type MarkdownLine = {
   text?: string
-  content?: any
   fg?: string
   attributes?: number
 }

@@ -1,6 +1,4 @@
 import { TextAttributes } from "@opentui/core";
-import { StyledText } from "@opentui/core";
-import { createJavaScriptRegexEngine, getSingletonHighlighter } from "shiki";
 
 const MONOKAI = {
   keyword: "#f92672",
@@ -20,11 +18,6 @@ const MONOKAI = {
   regex: "#e6db74",
   escape: "#ae81ff",
 };
-
-const COMMON_LANGS = [
-  "javascript", "typescript", "python", "go", "rust", "java", "c", "cpp",
-  "bash", "sh", "json", "yaml", "html", "css", "sql", "markdown", "dockerfile"
-];
 
 const LANGUAGE_COLORS = {
   js: "#f7df1e",
@@ -115,33 +108,6 @@ function getLangColor(lang) {
 function getLangLabel(lang) {
   return LANGUAGE_LABELS[lang.toLowerCase()] || lang.toUpperCase();
 }
-
-let shikiHighlighter = null;
-let shikiReady = false;
-let shikiInitPromise = null;
-
-async function initShiki() {
-  if (shikiReady) return;
-  if (shikiInitPromise) return shikiInitPromise;
-  
-  shikiInitPromise = (async () => {
-    try {
-      const jsEngine = await createJavaScriptRegexEngine();
-      shikiHighlighter = await getSingletonHighlighter({
-        themes: ["github-dark"],
-        langs: COMMON_LANGS,
-        engine: jsEngine,
-      });
-      shikiReady = true;
-    } catch (e) {
-      console.error("Failed to initialize shiki:", e);
-    }
-  })();
-  
-  return shikiInitPromise;
-}
-
-initShiki();
 
 const LANG_KEYWORDS = {
   bash: ["if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "do", "done", "in", "function", "return", "local", "export", "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed", "awk", "find", "chmod", "chown", "sudo", "apt", "yum", "npm", "yarn", "pnpm", "git", "docker", "kubectl", "curl", "wget", "ssh", "scp", "rsync", "tar", "zip", "unzip", "source", "alias", "unalias", "exit", "export", "readonly", "declare", "typeset", "unset", "shift", "set", "trap", "wait", "exec", "eval", "true", "false"],
@@ -360,49 +326,6 @@ function highlightCodeFallback(code, lang) {
   return tokens.map(t => ({ text: t.value, fg: tokenToFg(t) }));
 }
 
-function hexToRgba(hex) {
-  if (!hex || hex === "none") return { r: 0.97, g: 0.97, b: 0.95, a: 1 };
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  return { r, g, b, a: 1 };
-}
-
-function highlightCodeWithShiki(code, lang) {
-  if (!shikiReady || !shikiHighlighter) {
-    return null;
-  }
-
-  try {
-    const normalizedLang = lang.toLowerCase();
-    const result = shikiHighlighter.codeToTokens(code, {
-      lang: normalizedLang,
-      theme: "github-dark",
-    });
-
-    const lineTokens = result.tokens;
-
-    const output = [];
-    for (const line of lineTokens) {
-      const chunks = [];
-      for (const token of line) {
-        chunks.push({
-          text: token.content,
-          fg: hexToRgba(token.color),
-        });
-      }
-      if (chunks.length > 0) {
-        output.push(new StyledText(chunks));
-      } else {
-        output.push(null);
-      }
-    }
-    return output;
-  } catch (e) {
-    return null;
-  }
-}
-
 function normalizeThinkingLine(trimmed) {
   if (trimmed.startsWith("Thinking:")) return trimmed;
   if (trimmed.toLowerCase().startsWith("thinking:")) {
@@ -478,22 +401,8 @@ function renderCodeBlock(out, lang, lines, colors) {
       }
     }
   } else {
-    const code = lines.join("\n");
-    const highlightedLines = highlightCodeWithShiki(code, lang);
-    
-    if (highlightedLines && highlightedLines.length > 0) {
-      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-        const styledLine = highlightedLines[lineIdx];
-        if (styledLine) {
-          out.push({ content: styledLine });
-        } else {
-          out.push({ text: "  ", fg: colors.code });
-        }
-      }
-    } else {
-      for (const line of lines) {
-        out.push({ text: "  " + line, fg: colors.code });
-      }
+    for (const line of lines) {
+      out.push({ text: "  " + line, fg: colors.code });
     }
   }
 
