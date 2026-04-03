@@ -1116,6 +1116,10 @@ func (rt *Runtime) getEpisodicMemory(sessionID, query string, limit int) []Memor
 	return rt.memorySystem(sessionID).GetEpisodic(query, limit)
 }
 
+func (rt *Runtime) getRecentEpisodicMemory(sessionID string, limit int) []MemoryEntry {
+	return rt.memorySystem(sessionID).GetEpisodic("", limit)
+}
+
 func (rt *Runtime) memoryStats(sessionID string) MemoryStats {
 	return rt.memorySystem(sessionID).Stats()
 }
@@ -1992,6 +1996,15 @@ func (rt *Runtime) compressHistory(ctx context.Context, sessionID string) {
 	recent := history[len(history)-recentCount:]
 	old := history[:len(history)-recentCount]
 
+	ms := rt.memorySystem(sessionID)
+	episodic := ms.GetEpisodic("", MaxEpisodicMemoryItems)
+	episodicFacts := extractEpisodicFacts(episodic)
+	semantic := ms.GetSemantic("", 5)
+	var semanticLines []string
+	for _, entry := range semantic {
+		semanticLines = append(semanticLines, entry.Content)
+	}
+
 	var oldContent strings.Builder
 	for _, msg := range old {
 		role := msg.Role
@@ -2006,7 +2019,7 @@ func (rt *Runtime) compressHistory(ctx context.Context, sessionID string) {
 		isCode = looksLikeCodeTask(old)
 		rt.setIsCodeTask(sessionID, isCode)
 	}
-	summaryPrompt := buildCompressionPrompt(oldContent.String(), isCode)
+	summaryPrompt := buildCompressionPromptWithMemory(oldContent.String(), semanticLines, episodicFacts, isCode)
 
 	summary, err := rt.generateSummary(ctx, summaryPrompt)
 	if err != nil || summary == "" {
@@ -2059,6 +2072,86 @@ func looksLikeCodeTask(messages []sdk.Message) bool {
 		}
 	}
 	return false
+}
+
+func extractEpisodicFacts(episodic []MemoryEntry) string {
+	if len(episodic) == 0 {
+		return ""
+	}
+	var facts []string
+	toolFreq := make(map[string]int)
+	for _, entry := range episodic {
+		if entry.Tags != nil {
+			for _, tag := range entry.Tags {
+				toolFreq[tag]++
+			}
+		}
+	}
+	for tool, freq := range toolFreq {
+		if freq >= 2 {
+			facts = append(facts, fmt.Sprintf("Used %s %d times", tool, freq))
+		}
+	}
+	return strings.Join(facts, "; ")
+}
+
+func buildCompressionPromptWithMemory(history string, semanticFacts []string, episodicFacts string, codeTask bool) string {
+	var memoryContext strings.Builder
+	if len(semanticFacts) > 0 {
+		memoryContext.WriteString("Known facts:\n")
+		for _, fact := range semanticFacts {
+			memoryContext.WriteString("- " + fact + "\n")
+		}
+	}
+	if episodicFacts != "" {
+		memoryContext.WriteString("Event patterns: " + episodicFacts + "\n")
+	}
+	memoryStr := memoryContext.String()
+	if codeTask {
+		prompt := fmt.Sprintf(`Provide a continuation summary for an engineering task.
+Focus on implementation state, files, commands, decisions, remaining work, and anything needed so another coding agent can continue immediately.
+
+Use this template:
+---
+## Goal
+[User objective]
+
+## Constraints
+- [Important constraints, style rules, safety rules]
+
+## Current state
+- [What is already implemented]
+- [What is in progress]
+- [What still needs work]
+
+## Decisions
+- [Technical decisions and rationale]
+
+## Relevant files
+- [Exact paths and why they matter]
+
+## Commands
+- [Only important commands and high-signal outcomes]
+
+## Next steps
+- [Concrete next actions]
+---
+
+%s
+Conversation history:
+%s
+
+Keep it concise and specific, within 300 words.`, memoryStr, history)
+		return prompt
+	}
+	summaryPrompt := fmt.Sprintf(`Summarize this conversation concisely, preserving key facts, decisions, and any pending tasks.
+
+%s
+Conversation:
+%s
+
+Provide a 3-4 sentence summary that captures the essence.`, memoryStr, history)
+	return summaryPrompt
 }
 
 func buildCompressionPrompt(history string, codeTask bool) string {

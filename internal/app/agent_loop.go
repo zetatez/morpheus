@@ -81,11 +81,23 @@ func (rt *Runtime) buildMessagesForRoute(ctx context.Context, sessionID string, 
 			for _, doc := range rt.contextDocuments() {
 				messages = append(messages, map[string]any{"role": "system", "content": doc.Label + ":\n" + doc.Content})
 			}
+			ms := rt.memorySystem(sessionID)
+			if working := ms.GetWorkingMemory(); working != "" {
+				messages = append(messages, map[string]any{"role": "system", "content": "Working context:\n" + truncateLines(working, 100)})
+			}
 			if longTerm := rt.longTermMemory(sessionID); longTerm != "" {
-				messages = append(messages, map[string]any{"role": "system", "content": "Long-term memory:\n" + truncateLines(longTerm, 200)})
+				messages = append(messages, map[string]any{"role": "system", "content": "Long-term memory:\n" + truncateLines(longTerm, 150)})
+			}
+			episodic := rt.getRecentEpisodicMemory(sessionID, 5)
+			if len(episodic) > 0 {
+				var episodicLines []string
+				for _, entry := range episodic {
+					episodicLines = append(episodicLines, entry.Content)
+				}
+				messages = append(messages, map[string]any{"role": "system", "content": "Recent events:\n" + truncateLines(strings.Join(episodicLines, "; "), 100)})
 			}
 			if shortTerm := rt.shortTermMemory(sessionID); shortTerm != "" && shortTerm != rt.conversation.Summary(sessionID) {
-				messages = append(messages, map[string]any{"role": "system", "content": "Short-term memory:\n" + truncateLines(shortTerm, 200)})
+				messages = append(messages, map[string]any{"role": "system", "content": "Short-term memory:\n" + truncateLines(shortTerm, 100)})
 			}
 		}
 		if route == routeFreshInfo {

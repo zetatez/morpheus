@@ -1,17 +1,64 @@
 package app
 
 import (
-	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/zetatez/morpheus/pkg/sdk"
+)
+
+var (
+	whitespaceRE = regexp.MustCompile(`\s+`)
+	codeBlockRE  = regexp.MustCompile("(?s)```[\\s\\S]*?```|`[^`]+`")
 )
 
 func estimateTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	return (len(text) + 3) / 4
+	chars := len(text)
+	if chars <= 4 {
+		return 1
+	}
+	whitespace := float64(len(whitespaceRE.ReplaceAllString(text, " ")))
+	code := float64(len(codeBlockRE.ReplaceAllString(text, "")))
+	plain := float64(chars) - code
+	codeTokens := int(code / 4)
+	plainTokens := int((whitespace + plain*2) / 6)
+	return codeTokens + plainTokens + 1
+}
+
+func estimateMessagesTokens(messages []map[string]any) int {
+	total := 0
+	for _, msg := range messages {
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		parts := 0
+		if role == "system" {
+			parts += 3
+		} else if role == "user" {
+			parts += 4
+		} else if role == "assistant" {
+			parts += 4
+		}
+		parts += estimateTokens(content)
+		if toolCalls, ok := msg["tool_calls"].([]any); ok {
+			for _, tc := range toolCalls {
+				if m, ok := tc.(map[string]any); ok {
+					if fn, ok := m["function"].(map[string]any); ok {
+						if args, ok := fn["arguments"].(string); ok {
+							parts += estimateTokens(args) + 10
+						}
+						if name, ok := fn["name"].(string); ok {
+							parts += estimateTokens(name) + 6
+						}
+					}
+				}
+			}
+		}
+		total += parts
+	}
+	return total
 }
 
 func isToolLikeContent(content string) bool {
@@ -43,7 +90,29 @@ func compactToolOutput(content string) string {
 	if len(preview) > 200 {
 		preview = preview[:200] + "..."
 	}
-	return fmt.Sprintf("%s\n\n[Compacted tool output: original length %d chars]", preview, len(trimmed))
+	return preview + "\n\n[Compacted tool output: original length " + itoa(len(trimmed)) + " chars]"
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
 }
 
 func hasToolParts(parts []sdk.MessagePart) bool {
