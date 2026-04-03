@@ -430,6 +430,14 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			baseMessages = append(baseMessages, map[string]any{"role": "tool", "name": call.Name, "tool_call_id": call.ID, "content": formatToolResultContent(result)})
 			run.Messages = cloneMessages(baseMessages)
 
+			rt.addEpisodicMemory(sessionID, fmt.Sprintf("Tool: %s, Success: %v, Summary: %s", toolName, result.Success, truncateLines(formatToolResultContent(result), 100)), []string{toolName})
+			if rt.memorySystem(sessionID).ShouldExtract() {
+				extracted := rt.memorySystem(sessionID).ExtractSemanticFromEpisodic(ctx)
+				if extracted > 0 {
+					rt.logger.Debug("extracted semantic memories", zap.Int("count", extracted))
+				}
+			}
+
 			if !result.Success && result.Error != "" {
 				recoveryPrompt := fmt.Sprintf("The previous tool call '%s' failed with error: %s. Please analyze the error and try an alternative approach.", toolName, result.Error)
 				if route == routeFreshInfo && toolName == "web.fetch" && !freshInfoRetried {
@@ -449,6 +457,16 @@ func (rt *Runtime) runAgentLoopWithRun(ctx context.Context, existingRun *RunStat
 			if reflectionEnabled {
 				reflection.recordResult(result.Success)
 				if reflection.shouldReflect() && step < maxAgentSteps-1 {
+					memReflection := rt.memorySystem(sessionID).Reflect(ctx, results, normalized.Text)
+					if !memReflection.Success {
+						reflection.addSuggestion(memReflection.Feedback)
+					}
+					if memReflection.LoopDetected {
+						reflection.addSuggestion("Loop detected: consider alternative strategy")
+					}
+					for _, sugg := range memReflection.Suggestions {
+						reflection.addSuggestion(sugg)
+					}
 					reflectionPrompt := rt.buildReflectionPrompt(results, normalized.Text)
 					if reflectionPrompt != "" {
 						baseMessages = append(baseMessages, map[string]any{"role": "system", "content": reflectionPrompt})

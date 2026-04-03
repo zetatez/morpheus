@@ -496,6 +496,15 @@ If you must ask:
 - For complex tasks, first decompose the work into a short todo list, keep exactly one item in progress when practical, and complete the todos in order.
 - Do not treat the todo list as static; update it with ` + "`todo.write`" + ` whenever scope changes, steps finish, or a task fails.
 
+## Code Writing Principles
+- Write the minimum viable code that solves the problem correctly first.
+- Prefer simple, idiomatic solutions over complex clever ones.
+- Avoid premature optimization: do not add performance optimizations, alternative implementations, or multiple variations unless the user explicitly asks for them.
+- Do not include multiple algorithm implementations (e.g., both Lomuto and Hoare partition schemes) when one correct implementation suffices.
+- Do not add extensive comments, documentation, or example usage code unless requested.
+- Only expand scope with additional features, optimizations, or variations when the user explicitly requests them.
+- Follow the "Red-Green-Refactor" approach: first make it work with minimal code, then improve if needed.
+
 ## Output Style
 - Keep user-facing responses brief, concrete, and action-oriented.
 - Report what you changed, what you verified, and any remaining limitation.

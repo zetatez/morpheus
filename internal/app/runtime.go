@@ -69,6 +69,7 @@ type Runtime struct {
 	pendingConfirmations sync.Map
 	agentRegistry        *AgentRegistry
 	sessionMemory        sync.Map
+	memorySystems        sync.Map
 	intentCache          sync.Map
 	teamState            sync.Map
 	subagents            *subagent.Loader
@@ -542,7 +543,9 @@ func (rt *Runtime) clearSessionState(sessionID string) {
 	rt.allowedSubagents.Delete(sessionID)
 	rt.taskState.Delete(sessionID)
 	rt.pendingConfirmations.Delete(sessionID)
+	rt.syncMemoryToSession(sessionID)
 	rt.sessionMemory.Delete(sessionID)
+	rt.memorySystems.Delete(sessionID)
 	rt.teamState.Delete(sessionID)
 	rt.checkpoints.Delete(sessionID)
 	compressionState.Delete(sessionID)
@@ -1058,6 +1061,65 @@ func (rt *Runtime) longTermMemory(sessionID string) string {
 	return state.longTerm
 }
 
+func (rt *Runtime) memorySystem(sessionID string) *MemorySystem {
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = "default"
+	}
+	if current, ok := rt.memorySystems.Load(sessionID); ok {
+		return current.(*MemorySystem)
+	}
+	ms := NewMemorySystem(sessionID)
+	actual, _ := rt.memorySystems.LoadOrStore(sessionID, ms)
+	return actual.(*MemorySystem)
+}
+
+func (rt *Runtime) syncMemoryToSession(sessionID string) {
+	ms := rt.memorySystem(sessionID)
+	ms.SetWorkingMemory(rt.shortTermMemory(sessionID))
+
+	semantic := ms.GetSemantic("", 10)
+	var semanticLines []string
+	for _, entry := range semantic {
+		semanticLines = append(semanticLines, entry.Content)
+	}
+	if len(semanticLines) > 0 {
+		rt.setLongTermMemory(sessionID, strings.Join(semanticLines, "\n"))
+	}
+}
+
+func (rt *Runtime) syncSessionToMemory(sessionID string) {
+	ms := rt.memorySystem(sessionID)
+	ms.SetWorkingMemory(rt.shortTermMemory(sessionID))
+}
+
+func (rt *Runtime) addEpisodicMemory(sessionID, content string, tags []string) {
+	ms := rt.memorySystem(sessionID)
+	ms.AddEpisodic(MemoryEntry{
+		Content: content,
+		Tags:    tags,
+	})
+}
+
+func (rt *Runtime) addSemanticMemory(sessionID, content string, tags []string) {
+	ms := rt.memorySystem(sessionID)
+	ms.AddSemantic(MemoryEntry{
+		Content: content,
+		Tags:    tags,
+	})
+}
+
+func (rt *Runtime) getSemanticMemory(sessionID, query string, limit int) []MemoryEntry {
+	return rt.memorySystem(sessionID).GetSemantic(query, limit)
+}
+
+func (rt *Runtime) getEpisodicMemory(sessionID, query string, limit int) []MemoryEntry {
+	return rt.memorySystem(sessionID).GetEpisodic(query, limit)
+}
+
+func (rt *Runtime) memoryStats(sessionID string) MemoryStats {
+	return rt.memorySystem(sessionID).Stats()
+}
+
 func (rt *Runtime) intentState(sessionID string) *sessionIntentState {
 	state := &sessionIntentState{entries: map[string]intentClassification{}}
 	actual, _ := rt.intentCache.LoadOrStore(sessionID, state)
@@ -1487,6 +1549,7 @@ func (rt *Runtime) persistSession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		sessionID = "default"
 	}
+	rt.syncMemoryToSession(sessionID)
 	messages := rt.conversation.History(ctx, sessionID)
 	if err := rt.session.Write(ctx, sessionID, messages); err != nil {
 		return err
