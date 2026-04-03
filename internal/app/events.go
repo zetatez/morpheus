@@ -1369,3 +1369,429 @@ func (s *APIServer) handleSessionSummarize(w http.ResponseWriter, r *http.Reques
 		"summary":    summary,
 	})
 }
+
+func (s *APIServer) handleQuestion(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listQuestions(w)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) listQuestions(w http.ResponseWriter) {
+	questions := []map[string]interface{}{}
+	s.runtime.pendingConfirmations.Range(func(key, value interface{}) bool {
+		sessionID := key.(string)
+		pc := value.(*pendingConfirmation)
+		if pc.Kind == "question" {
+			questions = append(questions, map[string]interface{}{
+				"request_id": sessionID,
+				"tool":       pc.Tool,
+				"inputs":     pc.Inputs,
+				"kind":       pc.Kind,
+			})
+		}
+		return true
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"questions": questions})
+}
+
+func (s *APIServer) handleQuestionReply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	requestID := strings.TrimPrefix(r.URL.Path, "/question/")
+	requestID = strings.TrimSuffix(requestID, "/reply")
+	if requestID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	_, exists := s.runtime.pendingConfirmations.LoadAndDelete(requestID)
+	if !exists {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "question not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "request_id": requestID, "answer": body.Answer})
+}
+
+func (s *APIServer) handleQuestionReject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	requestID := strings.TrimPrefix(r.URL.Path, "/question/")
+	requestID = strings.TrimSuffix(requestID, "/reject")
+	if requestID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "request_id is required"})
+		return
+	}
+
+	_, exists := s.runtime.pendingConfirmations.LoadAndDelete(requestID)
+	if !exists {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "question not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "request_id": requestID, "rejected": true})
+}
+
+func (s *APIServer) handleProvider(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listProviders(w)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) listProviders(w http.ResponseWriter) {
+	providers := []map[string]interface{}{
+		{
+			"id":     "openai",
+			"name":   "OpenAI",
+			"models": []string{"gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"},
+		},
+		{
+			"id":     "deepseek",
+			"name":   "DeepSeek",
+			"models": []string{"deepseek-chat", "deepseek-coder"},
+		},
+		{
+			"id":     "anthropic",
+			"name":   "Anthropic",
+			"models": []string{"claude-3-opus", "claude-3-sonnet", "claude-3-haiku"},
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"providers": providers})
+}
+
+func (s *APIServer) handleProviderAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	authMethods := []map[string]string{
+		{"method": "api_key", "description": "API Key authentication"},
+		{"method": "oauth", "description": "OAuth 2.0 authentication"},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"auth_methods": authMethods})
+}
+
+func (s *APIServer) handleSessionChildren(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/children")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/children")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"session_id": sessionID,
+		"children":   []string{},
+	})
+}
+
+func (s *APIServer) handleSessionTodo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/todo")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/todo")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"session_id": sessionID,
+		"todos":      []map[string]string{},
+	})
+}
+
+func (s *APIServer) handleSessionInit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/init")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/init")
+	}
+
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"message":    "session initialized",
+	})
+}
+
+func (s *APIServer) handleSessionAbort(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/abort")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/abort")
+	}
+
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	run, ok := s.runtime.runs.latestBySession(sessionID)
+	if ok {
+		s.runtime.runs.cancel(run.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"aborted":    true,
+	})
+}
+
+func (s *APIServer) handleSessionRevert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/revert")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/revert")
+	}
+
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"reverted":   true,
+	})
+}
+
+func (s *APIServer) handleSessionUnrevert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/unrevert")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/unrevert")
+	}
+
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"unreverted": true,
+	})
+}
+
+func (s *APIServer) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/message")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/message")
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSessionMessageList(w, r, sessionID)
+	case http.MethodPost:
+		s.handleSessionMessageSend(w, r, sessionID)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *APIServer) handleSessionMessageList(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	messages := s.runtime.conversation.History(r.Context(), sessionID)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"session_id": sessionID,
+		"messages":   messages,
+	})
+}
+
+func (s *APIServer) handleSessionMessageSend(w http.ResponseWriter, r *http.Request, sessionID string) {
+	if sessionID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"})
+		return
+	}
+
+	var body struct {
+		Prompt  string `json:"prompt"`
+		Context string `json:"context"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"message_id": fmt.Sprintf("msg-%d", time.Now().Unix()),
+	})
+}
+
+func (s *APIServer) handleSessionDiff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/diff")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/diff")
+	}
+
+	messageID := r.URL.Query().Get("messageID")
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"session_id": sessionID,
+		"message_id": messageID,
+		"diff":       "",
+	})
+}
+
+func (s *APIServer) handleSessionCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/command")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/command")
+	}
+
+	var body struct {
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"command":    body.Command,
+	})
+}
+
+func (s *APIServer) handleSessionShell(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	sessionID = strings.TrimSuffix(sessionID, "/shell")
+	if sessionID == "" {
+		sessionID = strings.TrimPrefix(r.URL.Path, "/session/")
+		sessionID = strings.TrimSuffix(sessionID, "/shell")
+	}
+
+	var body struct {
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"session_id": sessionID,
+		"command":    body.Command,
+	})
+}
