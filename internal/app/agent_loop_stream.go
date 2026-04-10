@@ -17,6 +17,13 @@ import (
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
 
+const (
+	maxRetries        = 3
+	initialDelay      = 1 * time.Second
+	maxDelay          = 30 * time.Second
+	backoffMultiplier = 2.0
+)
+
 var streamingClient = &http.Client{
 	Transport: &streamingTransport{},
 	Timeout:   llmAPITimeout,
@@ -37,11 +44,63 @@ type replEmitter func(event string, data interface{}) error
 
 var defaultEvaluator = sdk.DefaultToolEvaluator()
 
-// AgentLoopStream runs the shared agent runner and emits SSE-friendly events.
-// For thinking/summary output, SSE streaming is used for better UX.
-// For tool calls, non-streaming is used to ensure JSON validity.
-func (rt *Runtime) AgentLoopStream(ctx context.Context, sessionID string, input UserInput, format *OutputFormat, mode AgentMode, emit replEmitter) (Response, error) {
-	return rt.AgentLoopStreamV2(ctx, sessionID, input, format, mode, emit)
+func isRetryableAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	lower := strings.ToLower(errStr)
+	if strings.Contains(lower, "context deadline") || strings.Contains(lower, "context canceled") {
+		return false
+	}
+	if strings.Contains(lower, "status 429") || strings.Contains(lower, "rate limit") {
+		return true
+	}
+	if strings.Contains(lower, "status 500") || strings.Contains(lower, "status 502") || strings.Contains(lower, "status 503") || strings.Contains(lower, "status 504") {
+		return true
+	}
+	if strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "timeout") {
+		return true
+	}
+	if strings.Contains(lower, "api error (status 429)") {
+		return true
+	}
+	return false
+}
+
+func (rt *Runtime) callChatWithToolsStreamWithRetry(ctx context.Context, messages []map[string]any, tools []map[string]any, toolChoice any, emit replEmitter) (chatResponse, error) {
+	var lastErr error
+	delay := initialDelay
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			rt.logger.Info("retrying API call", zap.Int("attempt", attempt+1), zap.Duration("delay", delay))
+			select {
+			case <-ctx.Done():
+				return chatResponse{}, ctx.Err()
+			case <-time.After(delay):
+			}
+			delay = time.Duration(float64(delay) * backoffMultiplier)
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+
+		resp, err := rt.callChatWithToolsStream(ctx, messages, tools, toolChoice, emit)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+		rt.logger.Warn("API call failed", zap.Int("attempt", attempt+1), zap.Error(err))
+
+		if !isRetryableAPIError(err) {
+			rt.logger.Info("non-retryable error, giving up")
+			return chatResponse{}, err
+		}
+	}
+
+	return chatResponse{}, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
 func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[string]any, tools []map[string]any, toolChoice any, emit replEmitter) (chatResponse, error) {
@@ -77,7 +136,12 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 
 	endpoint := profile.GetEndpoint(plannerCfg.Endpoint)
 
-	rt.logger.Info("callChatWithToolsStream request", zap.String("provider", plannerCfg.Provider), zap.String("model", model), zap.String("endpoint", endpoint), zap.Int("toolsCount", len(tools)), zap.Int("msgCount", len(messages)), zap.String("body", string(body)), zap.Any("temp", temp))
+	rt.logger.Info("callChatWithToolsStream request", zap.String("provider", plannerCfg.Provider), zap.String("model", model), zap.String("endpoint", endpoint), zap.Int("toolsCount", len(tools)), zap.Int("msgCount", len(messages)), zap.Duration("timeout", llmAPITimeout))
+	if len(body) < 2000 {
+		rt.logger.Info("request body", zap.String("body", string(body)))
+	} else {
+		rt.logger.Info("request body truncated", zap.Int("length", len(body)), zap.String("first_500", string(body[:500])))
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -96,7 +160,9 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 		}
 	}
 
+	reqStart := time.Now()
 	resp, err := streamingClient.Do(httpReq)
+	rt.logger.Info("HTTP request completed", zap.Duration("elapsed", time.Since(reqStart)), zap.Error(err))
 	if err != nil {
 		return chatResponse{}, err
 	}
@@ -129,7 +195,14 @@ func (rt *Runtime) callChatWithToolsStream(ctx context.Context, messages []map[s
 	finishReason := ""
 	const maxToolArgBytes = 64 * 1024
 
+	rt.logger.Info("SSE stream parsing started", zap.Int("toolNamesLen", len(toolNames)))
+	scanStart := time.Now()
+	scanIterations := 0
 	for scanner.Scan() {
+		scanIterations++
+		if scanIterations%100 == 0 {
+			rt.logger.Info("SSE stream parsing progress", zap.Int("iterations", scanIterations), zap.Duration("elapsed", time.Since(scanStart)))
+		}
 		line := strings.TrimSpace(scanner.Text())
 
 		evt, err := profile.ParseStreamLine(line)

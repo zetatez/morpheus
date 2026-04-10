@@ -222,7 +222,7 @@ func buildStrategyLibrary() []RecoveryStrategy {
 		{
 			Pattern: FailurePattern{Type: ToolNotFoundFailure},
 			Actions: []RecoveryAction{
-				{Tool: "mcp.query", Parameters: map[string]any{
+				{Tool: "mcp", Parameters: map[string]any{
 					"action": "tools",
 				}},
 			},

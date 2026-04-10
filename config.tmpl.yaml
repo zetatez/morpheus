@@ -22,11 +22,18 @@ planner:
   #   - ollama: Ollama local API (env: OLLAMA_API_KEY)
   #   - openai-compatible: Custom OpenAI-compatible API (env: OPENAI_COMPATIBLE_API_KEY)
   #   - builtin: Built-in keyword planner (no API key required)
-  provider: minimax
-  model: MiniMax-M2.7
+  provider: deepseek
+  model: deepseek-chat
   temperature: 1.0
-  api_key: ${MINIMAX_API_KEY}
-  # endpoint: https://api.minimax.io/v1/chat/completions (optional, defaults vary by provider)
+  api_key: ${DEEPSEEK_API_KEY}
+  # endpoint: https://api.minimaxi.com/anthropic/v1/messages  # Leave empty to use provider default
+
+agent:
+  max_consecutive_failures: 10
+  max_steps_without_progress: 50
+  max_similar_results: 5
+  max_run_duration_ms: 3600000
+  min_steps_before_check: 20
 
 server:
   listen: :8080

@@ -487,6 +487,23 @@ func (sm *SessionManager) ApprovePermission(sessionID, permission, pattern strin
 	})
 }
 
+func (sm *SessionManager) GetApprovedPermissions(sessionID string) []ApprovedPermission {
+	state := sm.GetOrCreate(sessionID)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	out := make([]ApprovedPermission, len(state.ApprovedPermissions))
+	copy(out, state.ApprovedPermissions)
+	return out
+}
+
+func (sm *SessionManager) SetApprovedPermissions(sessionID string, grants []ApprovedPermission) {
+	state := sm.GetOrCreate(sessionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.ApprovedPermissions = make([]ApprovedPermission, len(grants))
+	copy(state.ApprovedPermissions, grants)
+}
+
 func (sm *SessionManager) ClearApprovedPermissions(sessionID string) {
 	state := sm.GetOrCreate(sessionID)
 	state.mu.Lock()
@@ -510,6 +527,8 @@ func (sm *SessionManager) SetPendingConfirmation(sessionID string, pc *PendingCo
 
 func generateID(length int) string {
 	bytes := make([]byte, length/2)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return hex.EncodeToString(bytes)
 }

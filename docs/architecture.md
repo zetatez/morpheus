@@ -1,6 +1,6 @@
 # morpheus 技术架构分析报告
 
-> 自动生成时间: 2026-04-10
+> 自动生成时间: 2026-04-17
 > 分析路径: /home/shiyi/share/github/morpheus
 
 ---
@@ -9,38 +9,38 @@
 
 ### 1.1 项目简介
 
-| 项目信息 | 内容 |
-|----------|------|
-| 项目名称 | morpheus (github.com/zetatez/morpheus) |
-| 项目类型 | AI Agent 运行时 / CLI 工具 / REST API 服务 |
-| 核心功能 | 本地 AI Agent 运行时，支持工具执行、会话持久化、MCP 协议支持、交互式 TUI 客户端 |
+ | 项目信息   | 内容                                                                            |
+ | ---------- | ------                                                                          |
+ | 项目名称   | morpheus (github.com/zetatez/morpheus)                                          |
+ | 项目类型   | AI Agent 运行时 / CLI 工具 / REST API 服务                                      |
+ | 核心功能   | 本地 AI Agent 运行时，支持工具执行、会话持久化、MCP 协议支持、交互式 TUI 客户端 |
 
 ### 1.2 技术栈
 
-| 层级 | 技术 | 版本/说明 |
-|------|------|-----------|
-| 后端语言 | Go | 1.25.0 |
-| 前端语言 | TypeScript | cli/ 目录，使用 Bun 运行时 |
-| CLI 框架 | spf13/cobra | v1.8.0 |
-| 配置管理 | spf13/viper | v1.17.0 |
-| 数据库 | SQLite | modernc.org/sqlite v1.47.0 |
-| 日志 | uber.org/zap | v1.27.0 |
-| WebSocket | gorilla/websocket | v1.5.3 |
-| LSP 协议 | go.lsp.dev/protocol | v0.12.0 |
-| 前端框架 | solid-js | v1.9.12 |
-| 构建工具 | Bun | cli/ 目录 |
+ | 层级      | 技术                | 版本/说明                  |
+ | ------    | ------              | -----------                |
+ | 后端语言  | Go                  | 1.25.0                     |
+ | 前端语言  | TypeScript          | cli/ 目录，使用 Bun 运行时 |
+ | CLI 框架  | spf13/cobra         | v1.8.0                     |
+ | 配置管理  | spf13/viper         | v1.17.0                    |
+ | 数据库    | SQLite              | modernc.org/sqlite v1.47.0 |
+ | 日志      | uber.org/zap        | v1.27.0                    |
+ | WebSocket | gorilla/websocket   | v1.5.3                     |
+ | LSP 协议  | go.lsp.dev/protocol | v0.12.0                    |
+ | 前端框架  | solid-js            | v1.9.12                    |
+ | 构建工具  | Bun                 | cli/ 目录                  |
 
 ### 1.3 系统规模
 
-| 指标 | 数值 |
-|------|------|
-| 代码行数 | 40,985 行 |
-| 源文件数 | 125 个 |
-| 模块/目录数 | 61 个 |
-| 测试文件数 | 12 个 |
-| 测试覆盖率 | ~10% |
-| Go 依赖数量 | 11 个直接依赖 |
-| 二进制大小 | ~25MB (morpheus 可执行文件) |
+ | 指标        | 数值                        |
+ | ------      | ------                      |
+ | 代码行数    | 40,985 行                   |
+ | 源文件数    | 125 个                      |
+ | 模块/目录数 | 61 个                       |
+ | 测试文件数  | 12 个                       |
+ | 测试覆盖率  | ~10%                        |
+ | Go 依赖数量 | 11 个直接依赖               |
+ | 二进制大小  | ~25MB (morpheus 可执行文件) |
 
 ---
 
@@ -59,84 +59,18 @@
 
 ### 2.2 架构图
 
-```mermaid
-flowchart TB
-    subgraph CLI["CLI 层 (cmd/morpheus)"]
-        MAIN[main.go<br/>入口点]
-        REPL[REPL 模式]
-        SERVER[Server 模式]
-    end
-
-    subgraph SDK["SDK 层 (pkg/sdk)"]
-        PLANNER[Planner 接口]
-        TOOL[Tool 接口]
-        MODULE[Module 接口]
-        SKILL[Skill 接口]
-        POLICY[PolicyProvider 接口]
-        REGISTRY[ToolRegistry 接口]
-    end
-
-    subgraph Core["核心运行时 (internal/app)"]
-        AGENT[Agent]
-        LOOP[AgentLoop]
-        COORD[Coordinator]
-        RUNTIME[Runtime]
-        PROCESSOR[Processor]
-        COMPACTOR[Compactor]
-        SESSION_MGR[SessionManager]
-    end
-
-    subgraph Tools["工具系统 (internal/tools)"]
-        FS[fs 工具]
-        CMD[cmd 工具]
-        LSP[lsp 工具]
-        MCP[mcp 工具]
-        WEBFETCH[webfetch 工具]
-        AGENT_TOOL[agenttool]
-        ASK[ask 工具]
-        TODOTOOL[todotool]
-        SKILLTOOL[skilltool]
-    end
-
-    subgraph Session["会话层 (internal/session)"]
-        STORE_SQLITE[SQLite Store]
-        STORE[SessionStore 接口]
-    end
-
-    subgraph Config["配置层 (internal/config)"]
-        VIWER[Viper 配置]
-    end
-
-    subgraph Planner["规划器 (internal/planner)"]
-        LLM_PLANNER[LLM Planner]
-        KEYWORD_PLANNER[Keyword Planner]
-    end
-
-    subgraph Subagent["子代理 (internal/subagent)"]
-        LOADER[Loader]
-    end
-
-    subgraph Policy["策略层 (internal/policy)"]
-        EVAL[Policy Evaluation]
-    end
-
-    subgraph Convo["对话层 (internal/convo)"]
-        TRANSCRIPT[Transcript]
-    end
-
-    CLI --> SDK
-    SDK --> Core
-    Core --> Tools
-    Core --> Session
-    Core --> Config
-    Core --> Planner
-    Core --> Subagent
-    Core --> Policy
-    Core --> Convo
-
-    Session --> STORE_SQLITE[(SQLite)]
-    Tools --> REGISTRY
-    MCP -->|"SSE/HTTP STDIO"| EXTERNAL[外部 MCP 服务器]
+```
+CLI/REPL/API --> SDK --> Core Runtime --> Planner
+Core Runtime --> Exec --> Policy Engine
+Core Runtime --> Tools (fs, cmd, lsp, mcp, webfetch, agenttool, ask, skilltool, todotool)
+Core Runtime --> Session (SQLite)
+Core Runtime --> Convo (Transcript)
+Core Runtime --> Sync (Event Bus, Flock)
+Core Runtime --> Storage (JSON Storage, Multi Storage)
+Core Runtime --> Effect (Effect<T>, Layer<T>)
+Core Runtime --> Config (Viper)
+Core Runtime --> Subagent (Loader)
+Tools --> MCP Server (stdio/http/sse)
 ```
 
 ### 2.3 项目结构
@@ -186,28 +120,35 @@ morpheus/
 
 ### 2.4 模块划分
 
-| 模块 | 职责 | 位置 |
-|------|------|------|
-| CLI 入口 | 命令行入口，REPL/Server 模式选择 | cmd/morpheus |
-| 核心运行时 | Agent 执行循环、事件处理、流程控制 | internal/app |
-| 工具系统 | 文件操作、命令执行、LSP、MCP 等 | internal/tools |
-| 会话存储 | SQLite 会话持久化 | internal/session |
-| 规划器 | LLM 规划、关键词规划 | internal/planner |
-| 子代理 | 动态加载子代理定义 | internal/subagent |
-| 技能系统 | 技能热加载 | internal/skill |
-| 策略层 | 操作风险评估 | internal/policy |
-| SDK | 核心接口抽象 | pkg/sdk |
+  | 模块          | 职责                               | 位置                        |
+  | ------        | ------                             | ------                      |
+  | CLI 入口      | 命令行入口，REPL/Server 模式选择   | cmd/morpheus                |
+  | 核心运行时    | Agent 执行循环、事件处理、流程控制 | internal/app                |
+  | Effect 运行时 | Effect 驱动的依赖注入和运行时      | internal/app/effect_runtime |
+  | Reflection    | 根因分析、恢复和诊断               | internal/app/reflection     |
+  | 工具系统      | 文件操作、命令执行、LSP、MCP 等    | internal/tools              |
+  | 执行编排      | Orchestrator、策略执行、权限控制   | internal/exec               |
+  | 会话存储      | SQLite 会话持久化                  | internal/session            |
+  | 规划器        | LLM 规划、关键词规划               | internal/planner            |
+  | 子代理        | 动态加载子代理定义                 | internal/subagent           |
+  | 技能系统      | 技能热加载、渐进式加载             | internal/skill              |
+  | 策略层        | 操作风险评估                       | internal/policy             |
+  | 对话层        | 对话管理                           | internal/convo              |
+  | 同步层        | 事件总线、分布式锁                 | internal/sync               |
+  | 存储层        | JSON 存储抽象、多存储管理          | internal/storage            |
+  | Effect 系统   | 函数式依赖注入                     | internal/effect             |
+  | SDK           | 核心接口抽象                       | pkg/sdk                     |
 
 ### 2.5 服务通信方式
 
-| 通信模式 | 使用场景 | 技术实现 |
-|----------|----------|----------|
-| 同步调用 | Agent → Tools | Go 接口直接调用 |
-| 事件流 | 运行时事件 | Server-Sent Events (SSE) |
-| WebSocket | 远程控制 | gorilla/websocket |
-| STDIO | MCP 服务通信 | 进程标准输入/输出 |
-| HTTP/SSE | MCP 远程服务 | MCP 协议 |
-| SQLite | 会话持久化 | WAL 模式 |
+ | 通信模式   | 使用场景      | 技术实现                 |
+ | ---------- | ----------    | ----------               |
+ | 同步调用   | Agent → Tools | Go 接口直接调用          |
+ | 事件流     | 运行时事件    | Server-Sent Events (SSE) |
+ | WebSocket  | 远程控制      | gorilla/websocket        |
+ | STDIO      | MCP 服务通信  | 进程标准输入/输出        |
+ | HTTP/SSE   | MCP 远程服务  | MCP 协议                 |
+ | SQLite     | 会话持久化    | WAL 模式                 |
 
 ---
 
@@ -228,24 +169,117 @@ morpheus/
 
 ### 3.2 设计模式使用
 
-| 模式 | 使用场景 |
-|------|----------|
-| 接口抽象 | pkg/sdk 定义核心接口 |
-| 注册表模式 | ToolRegistry 管理工具注册 |
-| 适配器模式 | ToolHandlerAdapter, CallbacksAdapter |
-| 策略模式 | 多 Planner 实现 (LLM/Keyword) |
-| 插件模式 | Module/Skill 系统 |
-| 工厂模式 | PlannerFactory 创建规划器 |
+ | 模式       | 使用场景                             |
+ | ------     | ----------                           |
+ | 接口抽象   | pkg/sdk 定义核心接口                 |
+ | 注册表模式 | ToolRegistry 管理工具注册            |
+ | 适配器模式 | ToolHandlerAdapter, CallbacksAdapter |
+ | 策略模式   | 多 Planner 实现 (LLM/Keyword)        |
+ | 插件模式   | Module/Skill 系统                    |
+ | 工厂模式   | PlannerFactory 创建规划器            |
 
-### 3.3 代码质量
+### 3.3 三层记忆系统
 
-| 维度 | 评分 | 说明 |
-|------|------|------|
-| 命名规范 | ★★★★☆ | 命名清晰，遵循 Go 惯例 |
-| 函数长度 | ★★★☆☆ | runtime.go 单文件较大 |
-| 圈复杂度 | ★★★☆☆ | 部分函数较复杂 |
-| 重复代码 | ★★★★☆ | 无明显重复 |
-| 接口设计 | ★★★★★ | 接口定义清晰，职责分明 |
+Morpheus 采用三层记忆架构，支持短期上下文和长期知识积累：
+
+ | 层级            | 容量   | 刷新机制             | 用途                 |
+ | ------          | ------ | ----------           | ------               |
+ | Working Memory  | 8KB    | 每步更新 + 2分钟冷却 | 短期上下文，指针列表 |
+ | Episodic Memory | 100条  | 任务完成时记录       | 事件日志，词索引     |
+ | Semantic Memory | 24KB   | 压缩时提取           | 提取的模式和事实     |
+
+**工作流程:**
+1. **任务开始**: `syncMemoryToSession()` 同步 Working Memory
+2. **任务执行**: Short-term Memory 记录最近用户请求（lightweight 更新）
+3. **任务完成**: `recordEpisodicEvent()` 记录事件到 Episodic Memory
+4. **上下文压缩**: `ExtractSemanticFromEpisodic()` 从事件中提取模式到 Semantic Memory
+5. **会话恢复**: `LoadSession()` 后重新同步 Memory System
+
+**Reflection 系统**: 分析最近工具结果，检测成功/失败比率和重复动作模式。
+
+### 3.4 Effect 系统
+
+Morppheus 采用 Effect 系统实现函数式依赖注入：
+
+**核心概念:**
+- `Effect<T>`: 代表一个可组合的计算单元
+- `Layer<T>`: 提供上下文中服务的函数
+- 通过 `effect.Context` 传递依赖，实现松耦合
+
+**主要模块:**
+- `internal/effect/`: Effect 类型定义和 Layer 组合
+- `internal/app/effect_runtime/`: Effect 驱动的运行时实现
+
+**使用场景:**
+- Session 管理 (RunSessionEffect)
+- Agent Loop 执行 (RunAgentLoopEffectForRuntime)
+- 工具执行 (ExecuteToolEffect)
+- 权限检查 (CheckPermissionEffect, ApprovePermissionEffect)
+- 计划执行 (PlanEffect)
+- 检查点创建/回滚 (CreateCheckpointEffect, RollbackEffect)
+
+### 3.5 执行编排与策略引擎
+
+`internal/exec/orchestrator.go` 实现了执行编排器：
+
+**核心功能:**
+- `Orchestrator.ExecuteStep()`: 执行单个计划步骤
+- 策略检查: `checkPolicy()` 验证命令和文件操作的权限
+- 插件钩子: `ApplyToolBefore/After` 允许插件拦截工具调用
+
+**策略评估:**
+- 命令执行策略: 评估 shell 命令的风险
+- 文件操作策略: 评估 read/write/edit 的权限
+- 确认机制: `ConfirmationRequiredError` 支持交互式确认
+
+**Plan Mode:**
+- 只允许只读工具 (read, glob, grep, lsp, todowrite, webfetch, question)
+- 通过 `IsToolAllowed()` 实现
+
+### 3.6 同步层：事件总线与分布式锁
+
+`internal/sync/` 实现了事件驱动和分布式锁机制：
+
+**事件总线 (EventEmitter):**
+- 发布-订阅模式
+- 支持事件类型版本化 (VersionedType)
+- 投影器模式 (ProjectorFunc)
+
+**分布式锁 (Flock):**
+- 文件系统基础的分布式锁
+- 支持租约 (Lease) 和心跳
+- 自动检测和打破陈旧锁
+- 指数退避重试策略
+
+**使用场景:**
+- 多实例环境下的资源竞争
+- 会话级别的并发控制
+
+### 3.7 存储抽象层
+
+`internal/storage/` 提供了多层存储抽象：
+
+**存储类型:**
+- `Storage`: 基于文件的 JSON 存储，支持读写锁
+- `JSONStorage`: 简化版 JSON 存储接口
+- `MultiStorage`: 多存储命名空间管理
+- `WriteOptimizedStorage`: 写优化的缓存存储
+
+**特性:**
+- 可重入锁 (ReentrantLock)
+- 迁移系统 (RegisterMigration)
+- 事务支持 (Transaction)
+- 存储复制 (Copy, CopyAll)
+
+### 3.8 代码质量
+
+ | 维度     | 评分   | 说明                   |
+ | ------   | ------ | ------                 |
+ | 命名规范 | ★★★★☆  | 命名清晰，遵循 Go 惯例 |
+ | 函数长度 | ★★★☆☆  | runtime.go 单文件较大  |
+ | 圈复杂度 | ★★★☆☆  | 部分函数较复杂         |
+ | 重复代码 | ★★★★☆  | 无明显重复             |
+ | 接口设计 | ★★★★★  | 接口定义清晰，职责分明 |
 
 ---
 
@@ -267,6 +301,21 @@ morpheus/
    - 支持上下文压缩 (Compactor)
    - 会话历史长期保留 (720h 默认)
 
+4. **Effect 系统**
+   - 函数式依赖注入，实现松耦合
+   - 支持模块化、可测试的服务组合
+   - 通过 Layer 模式实现上下文传递
+
+5. **执行编排**
+   - 统一的 Orchestrator 管理工具执行
+   - 策略引擎支持细粒度权限控制
+   - Plan Mode 提供只读安全执行
+
+6. **分布式同步**
+   - 事件总线支持发布-订阅模式
+   - Flock 提供文件级分布式锁
+   - 多实例环境下的资源协调
+
 ### 4.2 技术亮点
 
 1. **智能上下文管理**
@@ -281,6 +330,11 @@ morpheus/
    - 细粒度的权限风险分级
    - 保护路径配置防止误操作
 
+4. **存储抽象**
+   - 多层存储支持 (JSON, Multi, WriteOptimized)
+   - 可重入锁和事务支持
+   - 迁移系统支持版本升级
+
 ### 4.3 代码质量优点
 
 - 使用 zap 高性能日志库
@@ -294,27 +348,27 @@ morpheus/
 
 ### 5.1 P1 - 重要问题
 
-| 问题 | 严重程度 | 说明 | 位置 |
-|------|----------|------|------|
-| 硬编码地址 | 中 | 多处 localhost/127.0.0.1 硬编码 | events_openapi.go:14, repl.go:211,225,229 |
-| WebSocket 安全 | 中 | 远程控制无认证机制 (bearer_token 为可选) | runtime.go |
+ | 问题           | 严重程度   | 说明                                     | 位置                                      |
+ | ------         | ---------- | ------                                   | ------                                    |
+ | 硬编码地址     | 中         | 多处 localhost/127.0.0.1 硬编码          | events_openapi.go:14, repl.go:211,225,229 |
+ | WebSocket 安全 | 中         | 远程控制无认证机制 (bearer_token 为可选) | runtime.go                                |
 
 ### 5.2 P2 - 一般问题
 
-| 问题 | 说明 | 位置 |
-|------|------|------|
-| 测试覆盖不足 | 测试文件仅 12 个，覆盖率约 10% | internal/ |
-| 大二进制文件 | 可执行文件约 25MB | ./morpheus |
-| 缺少 CI/CD | 未检测到 GitHub Actions/Jenkins 等 | - |
-| 循环依赖 | runtime.go 依赖较多模块 | internal/app/runtime.go |
+ | 问题         | 说明                               | 位置                    |
+ | ------       | ------                             | ------                  |
+ | 测试覆盖不足 | 测试文件仅 12 个，覆盖率约 10%     | internal/               |
+ | 大二进制文件 | 可执行文件约 25MB                  | ./morpheus              |
+ | 缺少 CI/CD   | 未检测到 GitHub Actions/Jenkins 等 | -                       |
+ | 循环依赖     | runtime.go 依赖较多模块            | internal/app/runtime.go |
 
 ### 5.3 P3 - 改进建议
 
-| 问题 | 说明 |
-|------|------|
-| 缺少 Benchmark | 性能测试不足 |
-| 大文件拆分 | runtime.go (115KB) 建议拆分 |
-| goreleaser 配置 | 已有 .goreleaser.yaml，可完善 |
+ | 问题            | 说明                          |
+ | ------          | ------                        |
+ | 缺少 Benchmark  | 性能测试不足                  |
+ | 大文件拆分      | runtime.go (115KB) 建议拆分   |
+ | goreleaser 配置 | 已有 .goreleaser.yaml，可完善 |
 
 ---
 
@@ -389,14 +443,14 @@ runtime.go (115KB) 建议按职责拆分为多个小文件:
 
 ### 7.1 总体评价
 
-| 维度 | 评分 | 说明 |
-|------|------|------|
-| 架构设计 | ★★★★☆ | 模块化清晰，插件化架构合理 |
-| 代码质量 | ★★★★☆ | 命名规范，接口设计良好 |
-| 可维护性 | ★★★★☆ | 模块划分清晰，依赖管理规范 |
-| 扩展性 | ★★★★★ | 插件系统、MCP 支持优秀 |
-| 安全性 | ★★★☆☆ | 有待加强 (硬编码、认证) |
-| 性能 | ★★★★☆ | SQLite WAL、zap 日志优化 |
+ | 维度     | 评分   | 说明                       |
+ | ------   | ------ | ------                     |
+ | 架构设计 | ★★★★☆  | 模块化清晰，插件化架构合理 |
+ | 代码质量 | ★★★★☆  | 命名规范，接口设计良好     |
+ | 可维护性 | ★★★★☆  | 模块划分清晰，依赖管理规范 |
+ | 扩展性   | ★★★★★  | 插件系统、MCP 支持优秀     |
+ | 安全性   | ★★★☆☆  | 有待加强 (硬编码、认证)    |
+ | 性能     | ★★★★☆  | SQLite WAL、zap 日志优化   |
 
 ### 7.2 改进建议优先级
 
@@ -417,28 +471,28 @@ runtime.go (115KB) 建议按职责拆分为多个小文件:
 
 ### A. 关键文件清单
 
-| 文件 | 说明 |
-|------|------|
-| cmd/morpheus/main.go | 应用入口 |
-| internal/app/runtime.go | 运行时主逻辑 (115KB) |
-| internal/app/agent_loop.go | Agent 执行循环 |
-| pkg/sdk/interfaces.go | 核心接口定义 |
-| internal/tools/registry/registry.go | 工具注册表 |
-| internal/session/store_sqlite.go | SQLite 会话存储 |
-| config.yaml | 配置文件 |
+ | 文件                                | 说明                 |
+ | ------                              | ------               |
+ | cmd/morpheus/main.go                | 应用入口             |
+ | internal/app/runtime.go             | 运行时主逻辑 (115KB) |
+ | internal/app/agent_loop.go          | Agent 执行循环       |
+ | pkg/sdk/interfaces.go               | 核心接口定义         |
+ | internal/tools/registry/registry.go | 工具注册表           |
+ | internal/session/store_sqlite.go    | SQLite 会话存储      |
+ | config.yaml                         | 配置文件             |
 
 ### B. 依赖清单
 
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| spf13/cobra | v1.8.0 | CLI 框架 |
-| spf13/viper | v1.17.0 | 配置管理 |
-| gorilla/websocket | v1.5.3 | WebSocket 支持 |
-| modernc.org/sqlite | v1.47.0 | SQLite 数据库 |
-| uber.org/zap | v1.27.0 | 日志库 |
-| go.lsp.dev/protocol | v0.12.0 | LSP 协议 |
-| google/uuid | v1.6.0 | UUID 生成 |
-| fsnotify/fsnotify | v1.6.0 | 文件监控 |
+ | 依赖                | 版本    | 用途           |
+ | ------              | ------  | ------         |
+ | spf13/cobra         | v1.8.0  | CLI 框架       |
+ | spf13/viper         | v1.17.0 | 配置管理       |
+ | gorilla/websocket   | v1.5.3  | WebSocket 支持 |
+ | modernc.org/sqlite  | v1.47.0 | SQLite 数据库  |
+ | uber.org/zap        | v1.27.0 | 日志库         |
+ | go.lsp.dev/protocol | v0.12.0 | LSP 协议       |
+ | google/uuid         | v1.6.0  | UUID 生成      |
+ | fsnotify/fsnotify   | v1.6.0  | 文件监控       |
 
 ### C. 检测命令记录
 
@@ -466,4 +520,4 @@ find . -type f \( -name "*.go" -o -name "*.ts" \) -exec wc -l {} +
 
 ---
 
-*报告生成时间: 2026-04-10*
+*报告生成时间: 2026-04-17*

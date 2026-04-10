@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/zetatez/morpheus/pkg/sdk"
 )
 
 const (
@@ -433,15 +434,21 @@ type CompactionContext struct {
 	Messages       []interface{}
 	ModelMaxTokens int64
 	Mode           string
+
+	// Tail preservation
+	TailTurns            int
+	PreserveRecentTokens int
 }
 
 type CompactionHandler struct {
-	service *CompactionService
+	service  *CompactionService
+	pipeline *CompactionPipeline
 }
 
 func NewCompactionHandler(sessionID string) *CompactionHandler {
 	return &CompactionHandler{
-		service: NewCompactionService(sessionID),
+		service:  NewCompactionService(sessionID),
+		pipeline: NewCompactionPipeline(),
 	}
 }
 
@@ -467,6 +474,33 @@ func (h *CompactionHandler) MarkCompacted() {
 
 func (h *CompactionHandler) Reset() {
 	h.service.Reset()
+}
+
+// FindTail identifies the last N turns to preserve verbatim during compaction.
+func (h *CompactionHandler) FindTail(messages []sdk.Message, tailTurns int, maxTailTokens int) *TailInfo {
+	if h.pipeline == nil {
+		return nil
+	}
+	return h.pipeline.FindTail(messages, tailTurns, maxTailTokens)
+}
+
+// BuildCompactPromptWithTail creates a prompt that splits messages into summarize/tail portions.
+func (h *CompactionHandler) BuildCompactPromptWithTail(messages []sdk.Message, tail *TailInfo, constraints []Constraint, memoryContext string) string {
+	if h.pipeline == nil {
+		return ""
+	}
+	return h.pipeline.BuildCompactPromptWithTail(messages, tail, constraints, memoryContext)
+}
+
+// CreateCompactionPart creates a MessagePart representing a compaction event.
+func (h *CompactionHandler) CreateCompactionPart(tailID string, auto, overflow bool) sdk.MessagePart {
+	return sdk.MessagePart{
+		Type:        "compaction",
+		TailStartID: tailID,
+		Auto:        auto,
+		Overflow:    overflow,
+		Text:        "Conversation was compacted to fit within context window.",
+	}
 }
 
 func (h *CompactionHandler) IsOverflow(currentTokens int64) bool {

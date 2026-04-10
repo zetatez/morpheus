@@ -310,11 +310,6 @@ func EstimateTokens(text string) int {
 // Layer 2: Context folding     - Fold related messages before compression triggers
 // Layer 3: Auto-compaction    - LLM summary when token count approaches window - 20K
 // Layer 4: Memory persistence - Preserve critical constraints across compression boundaries
-//
-// Layer 1: Micro-compaction    - Tool output in-place reduction, keep task-relevant parts
-// Layer 2: Context folding     - Fold related messages before compression triggers
-// Layer 3: Auto-compaction    - LLM summary when token count approaches window - 20K
-// Layer 4: Memory persistence - Preserve critical constraints across compression boundaries
 
 const (
 	// Layer 3 thresholds
@@ -333,6 +328,11 @@ const (
 	// Layer 4: Constraint preservation
 	ConstraintPreserveTokens = 3000 // Tokens to preserve for critical constraints
 	ConstraintMaxAge         = 10   // Max turns to preserve constraint across compression
+
+	// Tail preservation (Opencode-inspired)
+	DefaultTailTurns            = 3    // Number of recent user-assistant turns to preserve verbatim
+	DefaultPreserveRecentTokens = 8000 // Token budget for preserved tail
+	DefaultTailCooldownMessages = 5    // Min messages before next tail preservation
 )
 
 // CompactionPipeline implements the 4-layer compression system
@@ -355,6 +355,83 @@ func NewCompactionPipeline() *CompactionPipeline {
 	}
 }
 
+// FindTail identifies the last N turns to preserve verbatim during compaction.
+// It walks messages backwards, counting user-assistant turn pairs.
+func (p *CompactionPipeline) FindTail(messages []sdk.Message, tailTurns int, maxTailTokens int) *TailInfo {
+	if len(messages) == 0 || tailTurns <= 0 {
+		return nil
+	}
+
+	turnCount := 0
+	tailEnd := len(messages) // exclusive end of tail
+	tokenEst := int64(0)
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		msgTokens := int64(EstimateTokens(msg.Content))
+		for _, part := range msg.Parts {
+			msgTokens += int64(EstimateTokens(part.Text))
+			if part.Output != nil {
+				if content, ok := part.Output["content"].(string); ok {
+					msgTokens += int64(EstimateTokens(content))
+				}
+			}
+		}
+
+		if msg.Role == "user" {
+			turnCount++
+			tailEnd = i
+			tokenEst += msgTokens
+			break
+		}
+
+		tokenEst += msgTokens
+		if msg.Role == "assistant" && turnCount == 0 {
+			// Associate this assistant message with the next user turn
+			tailEnd = i
+		}
+	}
+
+	if turnCount == 0 {
+		return nil
+	}
+
+	// Try to include more turns within the token budget
+	if tailEnd > 0 {
+		for i := tailEnd - 1; i >= 0 && turnCount < tailTurns; i-- {
+			msg := messages[i]
+			msgTokens := int64(EstimateTokens(msg.Content) + len(msg.Parts)*10)
+
+			if tokenEst+msgTokens > int64(maxTailTokens) {
+				break
+			}
+
+			if msg.Role == "user" {
+				turnCount++
+				tailEnd = i
+				tokenEst += msgTokens
+			} else if msg.Role == "assistant" && i == tailEnd-1 {
+				tailEnd = i
+				tokenEst += msgTokens
+			} else {
+				break
+			}
+		}
+	}
+
+	startID := ""
+	if tailEnd < len(messages) {
+		startID = messages[tailEnd].ID
+	}
+
+	return &TailInfo{
+		StartIndex:    tailEnd,
+		StartID:       startID,
+		TurnCount:     turnCount,
+		TokenEstimate: tokenEst,
+	}
+}
+
 // Pipeline stages
 type PipelineStage int
 
@@ -373,6 +450,10 @@ type CompactRequest struct {
 	ModelMaxTokens      int64
 	TurnCount           int
 	CriticalConstraints []Constraint
+
+	// Tail preservation config
+	TailTurns            int
+	PreserveRecentTokens int
 }
 
 // Constraint represents a critical constraint that should survive compression
@@ -383,6 +464,14 @@ type Constraint struct {
 	Priority   int    // Higher = more important
 }
 
+// TailInfo tracks which messages to preserve verbatim during compaction
+type TailInfo struct {
+	StartIndex    int    // Index of the first message in the tail
+	StartID       string // ID of the first message in the tail (tail_start_id)
+	TurnCount     int    // Number of turns preserved
+	TokenEstimate int64  // Estimated token count of the tail
+}
+
 // CompactResult is the output of compaction pipeline
 type CompactResult struct {
 	Messages               []sdk.Message
@@ -391,6 +480,11 @@ type CompactResult struct {
 	ConstraintsUpdated     []Constraint
 	StageReached           PipelineStage
 	NeedsFurtherCompaction bool
+
+	// Tail preservation
+	Tail     *TailInfo `json:"tail,omitempty"`
+	Auto     bool      // Whether this was auto-compaction
+	Overflow bool      // Whether this was overflow-triggered
 }
 
 // MicroCompactor implements Layer 1: In-place tool output reduction
@@ -502,6 +596,80 @@ func (mc *MicroCompactor) isStructuralLine(line string) bool {
 
 func (mc *MicroCompactor) isBlankLine(line string) bool {
 	return strings.TrimSpace(line) == ""
+}
+
+// BuildCompactPromptWithTail creates a prompt that splits messages into
+// "summarize" (old) and "tail" (recent, preserved verbatim) portions.
+func (p *CompactionPipeline) BuildCompactPromptWithTail(messages []sdk.Message, tail *TailInfo, constraints []Constraint, memoryContext string) string {
+	var b strings.Builder
+
+	b.WriteString("You are performing context compression for an AI coding assistant.\n\n")
+	b.WriteString("The conversation below has been split into two parts:\n")
+	b.WriteString("1. **History to compress** - older messages that need to be summarized\n")
+	b.WriteString("2. **Recent context (preserved verbatim)** - the most recent messages that will be kept as-is\n\n")
+	b.WriteString("## Task\n")
+	b.WriteString("Create a summary of the **History to compress** section that captures:\n")
+	b.WriteString("1. Key decisions and their rationale\n")
+	b.WriteString("2. Important constraints or requirements\n")
+	b.WriteString("3. Current work in progress\n")
+	b.WriteString("4. Any unresolved issues or next steps\n\n")
+
+	if len(constraints) > 0 {
+		b.WriteString("## Critical Constraints\n")
+		for _, c := range constraints {
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", c.Source, c.Content))
+		}
+		b.WriteString("\n")
+	}
+
+	if memoryContext != "" {
+		b.WriteString("## Memory Context\n")
+		b.WriteString(memoryContext)
+		b.WriteString("\n\n")
+	}
+
+	// History to compress (before tail)
+	b.WriteString("## History to Compress\n")
+	compressEnd := tail.StartIndex
+	if compressEnd > len(messages) {
+		compressEnd = len(messages)
+	}
+	for i := 0; i < compressEnd; i++ {
+		msg := messages[i]
+		content := msg.Content
+		if len(content) > 400 {
+			content = content[:400] + "..."
+		}
+		b.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, msg.Role, content))
+	}
+
+	// Tail (preserved verbatim)
+	b.WriteString("\n## Recent Context (Preserved)\n")
+	for i := tail.StartIndex; i < len(messages); i++ {
+		msg := messages[i]
+		content := msg.Content
+		if len(content) > 800 {
+			content = content[:800] + "..."
+		}
+		b.WriteString(fmt.Sprintf("[%d] %s: %s\n", i, msg.Role, content))
+	}
+
+	b.WriteString("\n## Output Format\n")
+	b.WriteString("You MUST respond using this structured Markdown template:\n\n")
+	b.WriteString("## Objective\n")
+	b.WriteString("<What goal(s) is the user trying to accomplish?>\n\n")
+	b.WriteString("## Important Details\n")
+	b.WriteString("- <Key decisions and rationale>\n")
+	b.WriteString("- <Important constraints>\n")
+	b.WriteString("- <Notable discoveries>\n\n")
+	b.WriteString("## Work State\n")
+	b.WriteString("- Completed: <what has been finished>\n")
+	b.WriteString("- Active: <what is currently being worked on>\n")
+	b.WriteString("- Blocked: <any blockers>\n\n")
+	b.WriteString("## Next Move\n\n")
+	b.WriteString("## Relevant Files / Directories\n")
+
+	return b.String()
 }
 
 // ApplyToMessages applies micro-compaction to all tool outputs in messages
@@ -838,12 +1006,48 @@ func (ac *AutoCompactor) BuildCompactPrompt(messages []sdk.Message, constraints 
 			}
 		}
 	}
+
 	b.WriteString("\n## Output Format\n")
-	b.WriteString("Provide a markdown summary with sections:\n")
-	b.WriteString("- ## Summary: <2-3 sentence overview>\n")
-	b.WriteString("- ## Decisions: <key decisions made>\n")
-	b.WriteString("- ## Current State: <what's being worked on>\n")
-	b.WriteString("- ## Open Items: <remaining tasks>\n")
+	b.WriteString("You MUST respond using this structured Markdown template. Do not deviate from these section headings:\n\n")
+	b.WriteString("## Objective\n")
+	b.WriteString("<What goal(s) is the user trying to accomplish?>\n\n")
+	b.WriteString("## Important Details\n")
+	b.WriteString("- <Key decisions and their rationale>\n")
+	b.WriteString("- <Important constraints or requirements>\n")
+	b.WriteString("- <Notable discoveries made>\n\n")
+	b.WriteString("## Work State\n")
+	b.WriteString("- Completed: <what has been finished>\n")
+	b.WriteString("- Active: <what is currently being worked on>\n")
+	b.WriteString("- Blocked: <any blockers or unresolved issues>\n\n")
+	b.WriteString("## Next Move\n")
+	b.WriteString("<The single most important next step to take>\n\n")
+	b.WriteString("## Relevant Files / Directories\n")
+	b.WriteString("- <file paths and brief descriptions>\n")
+
+	return b.String()
+}
+
+// BuildStructuredSummaryPrompt creates a compact prompt for generating structured summaries
+// This is used for the overflow replay mechanism
+func (ac *AutoCompactor) BuildStructuredSummaryPrompt(messages []sdk.Message, constraints []Constraint) string {
+	var b strings.Builder
+
+	b.WriteString("Summarize the conversation above into a structured Markdown format.\n\n")
+
+	if len(constraints) > 0 {
+		b.WriteString("## Critical Constraints\n")
+		for _, c := range constraints {
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", c.Source, c.Content))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## Template (fill these sections):\n\n")
+	b.WriteString("## Objective\n\n")
+	b.WriteString("## Important Details\n\n")
+	b.WriteString("## Work State\n- Completed:\n- Active:\n- Blocked:\n\n")
+	b.WriteString("## Next Move\n\n")
+	b.WriteString("## Relevant Files / Directories\n")
 
 	return b.String()
 }
@@ -1023,6 +1227,10 @@ type SmartTokenBudget struct {
 	SystemPromptBudget   int64
 	MemoryBudget         int64
 	WorkingContextBudget int64
+
+	// Tail preservation (Opencode-inspired)
+	TailTurns            int   // Number of recent turns to preserve verbatim (default 3)
+	PreserveRecentTokens int64 // Token budget for preserved tail (default 8K)
 }
 
 // TokenAllocation represents the allocated budget for each content type
@@ -1075,7 +1283,6 @@ var modelRates = map[string]float64{
 // NewSmartTokenBudget creates a token budget configured for the given model
 func NewSmartTokenBudget(modelName string, modelMaxTokens int64) *SmartTokenBudget {
 	// Default allocations based on typical usage patterns
-	// These can be overridden via config
 	budget := &SmartTokenBudget{
 		ModelMaxTokens:       modelMaxTokens,
 		ReserveTokens:        AutoCompactReserveTokens,
@@ -1083,11 +1290,12 @@ func NewSmartTokenBudget(modelName string, modelMaxTokens int64) *SmartTokenBudg
 		SystemPromptBudget:   8000,  // ~8K for system prompt
 		MemoryBudget:         5000,  // ~5K for memory context
 		WorkingContextBudget: 10000, // ~10K for working context
+		TailTurns:            DefaultTailTurns,
+		PreserveRecentTokens: DefaultPreserveRecentTokens,
 	}
 
 	// Adjust based on model family
 	if isClaudeModel(modelName) {
-		// Claude models have larger effective context
 		budget.MemoryBudget = 6000
 		budget.WorkingContextBudget = 12000
 	}

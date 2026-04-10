@@ -22,7 +22,7 @@ import (
 	"github.com/zetatez/morpheus/internal/session"
 	"github.com/zetatez/morpheus/internal/skill"
 	"github.com/zetatez/morpheus/internal/subagent"
-	"github.com/zetatez/morpheus/internal/tools/codesearch"
+
 	"github.com/zetatez/morpheus/internal/tools/registry"
 	"github.com/zetatez/morpheus/internal/tools/websearch"
 	"github.com/zetatez/morpheus/pkg/sdk"
@@ -95,7 +95,6 @@ func (rt *EffectRuntime) Initialize(ctx context.Context) error {
 	rt.toolManager.SetNameNormalizer(sdk.NormalizeToolName)
 
 	_ = reg.Register(websearch.NewTool(websearch.ProviderDuckDuckGo, ""))
-	_ = reg.Register(codesearch.NewTool(codesearch.BackendSearchcode, "", ""))
 
 	planner, err := buildPlanner(rt.Config.Planner)
 	if err != nil {

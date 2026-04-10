@@ -16,6 +16,27 @@ const (
 	maxTodoPlannerRetry = 2
 )
 
+const todoPlannerSystemPrompt = `You are a task planner for a coding agent.
+
+Return JSON only with this schema:
+{
+  "todos": [
+    {"id": "todo-1", "content": "...", "status": "in_progress|pending", "priority": "high|medium|low", "active": true|false, "parallel_group": "group-a"}
+  ]
+}
+
+Rules:
+- Produce 3 to 6 todos for complex tasks.
+- Make todos concrete, execution-oriented, and ordered.
+- Mark exactly one todo as in_progress and active=true.
+- Use pending for the rest.
+- Keep content short and specific.
+- Focus on investigation, implementation, verification, and follow-up as needed.
+- Mark independent tasks that can run in parallel with the same parallel_group value.
+- Tasks in the same parallel_group can execute concurrently (e.g., parallel_group: "group-a" for multiple investigation tasks).
+- Tasks with no parallel_group or different groups must run sequentially.
+- Return valid JSON only.`
+
 type todoPlan struct {
 	Todos []todoPlanItem `json:"todos"`
 }
@@ -452,27 +473,6 @@ func hasCompletedTodo(todos []RunTodo) bool {
 	}
 	return false
 }
-
-const todoPlannerSystemPrompt = `You are a task planner for a coding agent.
-
-Return JSON only with this schema:
-{
-  "todos": [
-    {"id": "todo-1", "content": "...", "status": "in_progress|pending", "priority": "high|medium|low", "active": true|false, "parallel_group": "group-a"}
-  ]
-}
-
-Rules:
-- Produce 3 to 6 todos for complex tasks.
-- Make todos concrete, execution-oriented, and ordered.
-- Mark exactly one todo as in_progress and active=true.
-- Use pending for the rest.
-- Keep content short and specific.
-- Focus on investigation, implementation, verification, and follow-up as needed.
-- Mark independent tasks that can run in parallel with the same parallel_group value.
-- Tasks in the same parallel_group can execute concurrently (e.g., parallel_group: "group-a" for multiple investigation tasks).
-- Tasks with no parallel_group or different groups must run sequentially.
-- Return valid JSON only.`
 
 func (rt *Runtime) ReplaceTodos(sessionID string, todos []todotool.Todo) ([]todotool.Todo, error) {
 	if rt == nil {

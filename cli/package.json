@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun run build.rollup.js && bun run dist/index.js",
-    "start": "bun run build.rollup.js && bun run dist/index.js",
-    "build": "bun run build.rollup.js"
+    "dev": "bun run build.vite.js && bun run dist/index.js",
+    "start": "bun run build.vite.js && bun run dist/index.js",
+    "build": "bun run build.vite.js"
   },
   "dependencies": {
     "@opentui/core": "^0.1.97",

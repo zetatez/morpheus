@@ -10,14 +10,12 @@ import (
 )
 
 type serverMetrics struct {
-	startedAt    time.Time
-	active       int64
-	processed    int64
-	errors       int64
-	inputTokens  int64
-	outputTokens int64
-	mu           sync.Mutex
-	latency      []time.Duration
+	startedAt time.Time
+	active    int64
+	processed int64
+	errors    int64
+	mu        sync.Mutex
+	latency   []time.Duration
 }
 
 func newServerMetrics() *serverMetrics {
@@ -37,11 +35,6 @@ func (m *serverMetrics) record(duration time.Duration, err bool) {
 	m.mu.Unlock()
 }
 
-func (m *serverMetrics) addTokens(input, output int64) {
-	atomic.AddInt64(&m.inputTokens, input)
-	atomic.AddInt64(&m.outputTokens, output)
-}
-
 func (m *serverMetrics) snapshot() map[string]any {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
@@ -56,8 +49,6 @@ func (m *serverMetrics) snapshot() map[string]any {
 		"active_requests":    atomic.LoadInt64(&m.active),
 		"processed_requests": atomic.LoadInt64(&m.processed),
 		"error_requests":     atomic.LoadInt64(&m.errors),
-		"input_tokens":       atomic.LoadInt64(&m.inputTokens),
-		"output_tokens":      atomic.LoadInt64(&m.outputTokens),
 		"latency_ms":         latencyMs,
 		"memory": map[string]any{
 			"heap_alloc_mb": bytesToMB(mem.HeapAlloc),

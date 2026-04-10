@@ -73,6 +73,36 @@ const parseAttachmentPaths = (text) => {
     }
     return paths;
 };
+const formatRelativeTime = (dateStr) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffSecs < 60)
+        return "just now";
+    if (diffMins < 60)
+        return `${diffMins}m ago`;
+    if (diffHours < 24)
+        return `${diffHours}h ago`;
+    if (diffDays === 1)
+        return "yesterday";
+    if (diffDays < 7)
+        return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+};
+
+function StatusBar(props) {
+    return (<box flexDirection="row" paddingRight={2} paddingBottom={1}>
+      <text fg={props.agentModeColor}>{props.agentModeIcon} {props.agentModeLabel}</text>
+      <text fg={theme.muted}> · {props.model}{props.busy ? " · Running" : ""}{props.activeRunBanner ? ` · ${props.activeRunBanner}` : ""}</text>
+      <box flexGrow={1}/>
+      <text fg={theme.success}>{props.notification}</text>
+    </box>);
+}
+
 function App(props) {
     const terminal = useTerminalDimensions();
     const [apiUrl, setApiUrl] = createSignal(props.apiUrl);
@@ -113,15 +143,10 @@ function App(props) {
     const [attachments, setAttachments] = createSignal([]);
     const [escapePressed, setEscapePressed] = createSignal(false);
     const [isTyping, setIsTyping] = createSignal(false);
-    const [serverMetrics, setServerMetrics] = createSignal(null);
     const [currentModel, setCurrentModel] = createSignal("");
     const [todoPulse, setTodoPulse] = createSignal(false);
-    const [activeTeamTasks, setActiveTeamTasks] = createSignal([]);
-    const [teamTaskPulse, setTeamTaskPulse] = createSignal(false);
     let monitorInterval;
-    let metricsInterval;
     let todoPulseInterval;
-    let teamTaskPulseInterval;
     let abortController;
     let escapeTimeoutRef;
     let inputQueue = [];
@@ -537,18 +562,15 @@ function App(props) {
             }
         };
         const normalizeThinkingText = (text) => {
-            const trimmed = text.trimStart();
-            if (!trimmed)
+            const firstLine = text.split("\n")[0].trim();
+            if (!firstLine)
                 return text;
-            if (trimmed.toLowerCase().startsWith("thinking:"))
-                return text;
-            return `Thinking: ${text}`;
+            if (firstLine.toLowerCase().startsWith("thinking:"))
+                return firstLine;
+            return `Thinking: ${firstLine}`;
         };
         const decorateThinkingText = (text) => {
-            const normalized = normalizeThinkingText(text);
-            if (normalized.startsWith("Thinking:\n"))
-                return normalized;
-            return normalized.replace(/^Thinking:\s*/, "Thinking:\n");
+            return normalizeThinkingText(text);
         };
         const phaseNoteForTool = (tool) => {
             if (tool === "web.fetch")
@@ -729,30 +751,6 @@ function App(props) {
             }
             if (evt.event === "error") {
                 appendEntry({ id: crypto.randomUUID(), role: "error", content: evt.data.error });
-                return;
-            }
-            if (evt.event === "team_plan") {
-                const tasks = evt.data.tasks;
-                if (tasks && tasks.length > 0) {
-                    setActiveTeamTasks(tasks);
-                    setTeamTaskPulse(true);
-                }
-                return;
-            }
-            if (evt.event === "team_task_started" || evt.event === "team_task_finished" || evt.event === "team_task_error") {
-                const task = evt.data;
-                setActiveTeamTasks(prev => {
-                    const existing = prev.findIndex(t => t.id === task.id);
-                    if (existing >= 0) {
-                        const updated = [...prev];
-                        updated[existing] = task;
-                        return updated;
-                    }
-                    return [...prev, task];
-                });
-                if (evt.event === "team_task_finished" || evt.event === "team_task_error") {
-                    setActiveRunBanner(evt.event === "team_task_error" ? `Task ${task.id} failed` : `Task ${task.id} completed`);
-                }
                 return;
             }
             if (evt.event === "done") {
@@ -1323,7 +1321,7 @@ function App(props) {
                 appendEntry({
                     id: crypto.randomUUID(),
                     role: "assistant",
-                    content: "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /plan <prompt>\n  /team\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
+                    content: "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /plan <prompt>\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
                 });
                 return true;
             case "/ssh": {
@@ -1463,12 +1461,13 @@ function App(props) {
                     }
                     const items = sessions
                         .slice()
-                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                        .sort((a, b) => new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime())
                         .slice(0, 32)
                         .map((s) => ({
                         id: s.id,
-                        title: s.id,
-                        subtitle: s.created_at,
+                        title: s.title ?? s.id,
+                        subtitle: s.summary,
+                        meta: formatRelativeTime(s.updated_at ?? s.created_at),
                     }));
                     startModal("sessions", "Sessions", "Type to search, Enter to select", items);
                     const currentIndex = items.findIndex((item) => item.id === sessionID());
@@ -1493,10 +1492,11 @@ function App(props) {
                         appendEntry({ id: crypto.randomUUID(), role: "assistant", content: "No skills found." });
                         return true;
                     }
+                    const maxWidth = Math.max(0, ...res.skills.map((s) => s.name.length));
                     const items = res.skills.map((s) => ({
                         id: s.name,
-                        title: s.name,
-                        subtitle: s.description,
+                        title: s.name.padEnd(maxWidth),
+                        subtitle: s.description?.replace(/\s+/g, " ").trim(),
                     }));
                     startModal("skills", "Skills", "Type to search, Enter to select", items);
                     setModalInput("");
@@ -1738,19 +1738,8 @@ function App(props) {
             textarea.setText(props.initialPrompt);
             submit(props.initialPrompt);
         }
-        metricsInterval = setInterval(async () => {
-            try {
-                const metrics = await client().metrics();
-                setServerMetrics(metrics);
-            }
-            catch {
-                // ignore
-            }
-        }, 3000);
         const initMetrics = async () => {
             try {
-                const metrics = await client().metrics();
-                setServerMetrics(metrics);
                 const models = await client().models();
                 if (models.current) {
                     setCurrentModel(models.current.model);
@@ -1762,14 +1751,9 @@ function App(props) {
         };
         initMetrics();
         todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700);
-        teamTaskPulseInterval = setInterval(() => setTeamTaskPulse((value) => !value), 700);
         onCleanup(() => {
-            if (metricsInterval)
-                clearInterval(metricsInterval);
             if (todoPulseInterval)
                 clearInterval(todoPulseInterval);
-            if (teamTaskPulseInterval)
-                clearInterval(teamTaskPulseInterval);
         });
     });
     createEffect(() => {
@@ -1779,38 +1763,31 @@ function App(props) {
     });
     const width = createMemo(() => terminal().width);
     const height = createMemo(() => terminal().height);
-    const contentHeight = createMemo(() => Math.max(5, height() - 6));
+    const contentHeight = createMemo(() => Math.max(5, height() - 7));
     const todoPanelWidth = createMemo(() => activeTodos().length > 0 ? Math.min(42, Math.max(28, Math.floor(width() * 0.28))) : 0);
-    const teamTaskPanelWidth = createMemo(() => activeTeamTasks().length > 0 ? Math.min(48, Math.max(32, Math.floor(width() * 0.32))) : 0);
-    const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth() - teamTaskPanelWidth()));
+    const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth()));
     return (<box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
-      <StatusBar apiUrl={apiUrl()} sessionID={sessionID()} serverMetrics={serverMetrics()} agentMode={agentMode()}/>
+      <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+        <text fg={theme.muted}>{apiUrl()}</text>
+        <box flexGrow={1} />
+        <text fg={theme.muted}>session {sessionID()}</text>
+      </box>
       <box flexDirection="row" height={contentHeight()}>
         <ChatEntries entries={entries()} isToolExpanded={isToolExpanded} onToggleTool={toggleToolExpanded} mainPanelWidth={mainPanelWidth()} contentHeight={contentHeight()} scrollRef={(val) => { scroll = val; }}/>
         <Show when={activeTodos().length > 0}>
           <TodoList todos={activeTodos()} todoPulse={todoPulse()} panelWidth={todoPanelWidth()} contentHeight={contentHeight()}/>
         </Show>
-        <Show when={activeTeamTasks().length > 0}>
-          <TeamTaskPanel tasks={activeTeamTasks()} taskPulse={teamTaskPulse()} panelWidth={teamTaskPanelWidth()} contentHeight={contentHeight()}/>
-        </Show>
       </box>
       <Modal modal={modal()} modalTitle={modalTitle()} modalHint={modalHint()} modalQuery={modalQuery()} modalItems={modalItems()} modalSelected={modalSelected()} modalInput={modalInput()} modalInputRef={modalInputRef} runsStatusFilter={runsStatusFilter()} runTimeline={runTimeline()} runTimelineID={runTimelineID()} onQueryChange={updateModalQuery} onSubmit={handleModalSubmit} width={width()} height={height()}/>
-      <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-        <box flexDirection="row" paddingBottom={2}>
-          <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
-          <Show when={currentModel()}>
-            <text fg={theme.muted}> · {currentModel()}</text>
-          </Show>
-          <Show when={activeRunBanner()}>
-            <text fg={theme.muted}> · {activeRunBanner()}</text>
-          </Show>
-          <box flexGrow={1}/>
-          <Show when={notification()}>
-            <text fg={theme.success}>{notification()}</text>
-          </Show>
-        </box>
+      <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={2}>
+        <StatusBar 
+          model={currentModel()} 
+          activeRunBanner={activeRunBanner()} 
+          notification={notification()}
+          busy={busy()}
+        />
         <Show when={attachments().length > 0}>
-          <box flexDirection="row" paddingBottom={1} flexWrap="wrap">
+          <box flexDirection="row" paddingTop={1} paddingBottom={1} flexWrap="wrap">
             <For each={attachments()}>
               {(att, idx) => {
             const remove = () => {
@@ -1827,6 +1804,7 @@ function App(props) {
             </For>
           </box>
         </Show>
+        <box paddingTop={1}/>
         <textarea ref={(val) => { textarea = val; }} height={3} focused={!modal()} textColor={theme.text} focusedTextColor={theme.text} cursorColor={theme.primary} onContentChange={() => {
             if (suppressHistoryChange)
                 return;
@@ -1888,17 +1866,6 @@ function App(props) {
           <text fg={theme.muted}>Tab toggle mode · Ctrl+N new session · Ctrl+C exit · Ctrl+Y copy selection</text>
         </box>
       </box>
-    </box>);
-}
-function StatusBar(props) {
-    return (<box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-      <text fg={theme.muted}>{props.apiUrl}</text>
-      <box flexGrow={1}/>
-      <text fg={theme.muted}>session {props.sessionID}</text>
-      <box paddingLeft={3}/>
-      <text fg={theme.muted}>↑{formatToken(props.serverMetrics?.input_tokens ?? 0)}</text>
-      <box paddingLeft={1}/>
-      <text fg={theme.muted}>↓{formatToken(props.serverMetrics?.output_tokens ?? 0)}</text>
     </box>);
 }
 function ToolEntry(props) {
@@ -2048,60 +2015,6 @@ function TodoList(props) {
                 <Show when={note()}>
                   <text fg={todo.status === "failed" ? theme.todoFailed : theme.muted}>
                     {note()}
-                  </text>
-                </Show>
-              </box>);
-        }}
-        </For>
-      </box>
-    </Show>);
-}
-function TeamTaskPanel(props) {
-    const taskStatusColor = (status, pulse) => {
-        if (status === "completed")
-            return theme.todoDone;
-        if (status === "failed")
-            return theme.todoFailed;
-        if (status === "cancelled")
-            return theme.todoCancelled;
-        if (status === "running")
-            return pulse ? theme.primary : theme.todoActive;
-        return theme.todoPending;
-    };
-    const truncate = (str, maxLen) => {
-        if (str.length <= maxLen)
-            return str;
-        return str.slice(0, maxLen - 3) + "...";
-    };
-    return (<Show when={props.tasks.length > 0}>
-      <box width={props.panelWidth} height={props.contentHeight} flexDirection="column" paddingLeft={1} paddingRight={2} paddingTop={1} backgroundColor={theme.todoPanel}>
-        <text fg={theme.primary} attributes={TextAttributes.BOLD}># Team Tasks</text>
-        <box paddingBottom={1}/>
-        <For each={props.tasks}>
-          {(task) => {
-            const statusIcon = () => {
-                if (task.status === "completed")
-                    return "[x]";
-                if (task.status === "running")
-                    return props.taskPulse ? "[•]" : "[>]";
-                if (task.status === "failed")
-                    return "[!]";
-                if (task.status === "cancelled")
-                    return "[-]";
-                return "[ ]";
-            };
-            return (<box flexDirection="column" paddingBottom={1}>
-                <text fg={taskStatusColor(task.status, props.taskPulse)}>
-                  {`${statusIcon()} [${task.role}] ${truncate(task.prompt, 40)}`}
-                </text>
-                <Show when={task.summary}>
-                  <text fg={theme.muted}>
-                    {`  → ${truncate(task.summary || "", 60)}`}
-                  </text>
-                </Show>
-                <Show when={task.error}>
-                  <text fg={theme.todoFailed}>
-                    {`  ! ${truncate(task.error || "", 60)}`}
                   </text>
                 </Show>
               </box>);

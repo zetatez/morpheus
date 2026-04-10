@@ -7,23 +7,14 @@ var TOOL_GROUPS = map[string][]string{
 	"read":    {"read", "lsp"},
 	"browse":  {"glob", "grep"},
 	"exec":    {"bash", "exec", "shell"},
-	"network": {"webfetch", "websearch", "codesearch", "http"},
+	"network": {"webfetch", "websearch", "http"},
 	"task":    {"task", "subagent"},
 	"code":    {"lsp"},
 	"skill":   {"skill"},
 	"plan":    {"plan_enter", "plan_exit", "plan.execute", "plan.step"},
 }
 
-var toolAliases = map[string]string{
-	"cmd.exec":         "bash",
-	"lsp.query":        "lsp",
-	"conversation.ask": "question",
-	"web.fetch":        "webfetch",
-	"todo.write":       "todowrite",
-	"agent.run":        "task",
-	"agent.coordinate": "task",
-	"agent.message":    "task",
-}
+var toolAliases = map[string]string{}
 
 func ToolPermission(tool string) string {
 	tool = strings.ToLower(tool)

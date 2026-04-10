@@ -21,6 +21,11 @@ type MessagePart struct {
 	Output map[string]any
 	Error  string
 	Status string
+
+	// Compaction metadata (populated when Type == "compaction")
+	TailStartID string `json:"tail_start_id,omitempty"`
+	Auto        bool   `json:"auto,omitempty"`
+	Overflow    bool   `json:"overflow,omitempty"`
 }
 
 // PlanStatus enumerates the lifecycle states for a plan.

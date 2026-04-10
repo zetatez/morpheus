@@ -187,10 +187,23 @@ func (p *MiniMaxProvider) GetSystemPrompt() string {
 4. Output results directly
 
 ## Tool Selection
-- fs.read/fs.write/fs.edit: File operations
-- fs.glob/fs.grep: Search files
-- lsp.query: Code navigation
-- cmd.exec: Shell commands
+- todowrite: Todo list management
+- bash: Shell commands
+- glob/grep: Search files
+- read/write/edit: File operations
+- lsp: Code navigation
+- webfetch/websearch: Web access
+- question: Ask user
+- mcp: MCP operations
+- skill: Skills
+- task/agent.coordinate/agent.message: Sub-agents
+
+## Best Practices
+- **Think independently**: Use tools to explore and understand the codebase yourself. Do not ask the user for clarification unless truly blocked.
+- **Verify before claiming**: Run tests, check git history, inspect code rather than assuming.
+- **Iterate actively**: Try an approach, observe results, adjust. Do not wait for perfect understanding before acting.
+- **Prefer bash for almost everything**: file ops (ls, find, cat), git, tests, builds, JSON parsing (jq), network checks
+- Combine related commands with && or ;
 
 ## Output Format (valid JSON only):
 {"summary": "1-2 line summary", "steps": [{"description": "action", "tool": "name", "inputs": {"key": "value"}}], "risks": []}`

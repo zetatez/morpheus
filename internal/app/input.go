@@ -9,8 +9,40 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/zetatez/morpheus/internal/command"
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
+
+// initCommandRegistry initializes the command registry with built-in commands
+// and discovers commands from the project's .morpheus/command/ directory.
+func initCommandRegistry(workspaceRoot string) *command.CommandRegistry {
+	loader := command.NewLoader(nil)
+
+	// Load built-in commands
+	loader.Registry().LoadBuiltinCommands()
+
+	// Discover commands from .morpheus/command/ directory
+	cmdDir := filepath.Join(workspaceRoot, ".morpheus", "command")
+	if stat, err := os.Stat(cmdDir); err == nil && stat.IsDir() {
+		l := command.NewLoader([]string{cmdDir})
+		_ = l.Load()
+		for _, cmd := range l.Registry().List() {
+			loader.Registry().Register(cmd)
+		}
+	}
+
+	// Also check .opencode/command/ for cross-compatibility
+	ocCmdDir := filepath.Join(workspaceRoot, ".opencode", "command")
+	if stat, err := os.Stat(ocCmdDir); err == nil && stat.IsDir() {
+		l := command.NewLoader([]string{ocCmdDir})
+		_ = l.Load()
+		for _, cmd := range l.Registry().List() {
+			loader.Registry().Register(cmd)
+		}
+	}
+
+	return loader.Registry()
+}
 
 const (
 	maxAttachmentCount     = 8
@@ -28,6 +60,7 @@ type InputAttachment struct {
 type UserInput struct {
 	Text        string            `json:"input"`
 	Attachments []InputAttachment `json:"attachments,omitempty"`
+	Isolated    bool              `json:"isolated,omitempty"`
 }
 
 type normalizedInput struct {
@@ -38,6 +71,45 @@ type normalizedInput struct {
 func (rt *Runtime) normalizeUserInput(ctx context.Context, raw UserInput) (normalizedInput, error) {
 	text := strings.TrimSpace(raw.Text)
 	attachments := raw.Attachments
+
+	// Check for slash commands
+	cmdName, cmdArgs := command.DetectCommand(text)
+	if cmdName != "" && rt.commands != nil {
+		if cmd, ok := rt.commands.Get(cmdName); ok {
+			cmdCtx := &command.CommandContext{
+				WorkspaceRoot: rt.cfg.WorkspaceRoot,
+				UserInput:     cmdArgs,
+				SessionID:     "",
+			}
+			rewritten := cmd.BuildPrompt(cmdCtx)
+			if rewritten != "" {
+				text = rewritten
+			}
+		} else {
+			available := rt.commands.List()
+			var b strings.Builder
+			b.WriteString("I don't recognize `/" + cmdName + "`.\n\n")
+			if len(available) > 0 {
+				b.WriteString("**Available commands:**\n")
+				for _, c := range available {
+					b.WriteString(fmt.Sprintf("- `/%s` — %s\n", c.Name, c.Description))
+				}
+			}
+			text = b.String()
+		}
+	}
+
+	// Handle bare / to show available commands
+	if text == "/" && rt.commands != nil {
+		available := rt.commands.List()
+		var b strings.Builder
+		b.WriteString("**Available commands:**\n")
+		for _, c := range available {
+			b.WriteString(fmt.Sprintf("- `/%s` — %s\n", c.Name, c.Description))
+		}
+		text = b.String()
+	}
+
 	if len(attachments) == 0 && looksLikeFilePath(text) {
 		attachments = []InputAttachment{{Path: text}}
 		text = ""

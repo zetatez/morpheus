@@ -1,12 +1,16 @@
 package app
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/zetatez/morpheus/internal/config"
 	"github.com/zetatez/morpheus/pkg/sdk"
+	"gopkg.in/yaml.v3"
 )
 
 type AgentKind string
@@ -119,9 +123,117 @@ func (r *AgentRegistry) ListSubagents() []*Agent {
 	return agents
 }
 
+// agentFrontmatter is the YAML frontmatter for markdown-defined agents.
+type agentFrontmatter struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Mode        string `yaml:"mode"`
+	Hidden      bool   `yaml:"hidden"`
+	Model       string `yaml:"model"`
+}
+
+var agentFrontmatterRE = regexp.MustCompile(`(?s)^---\n(.+?)\n---`)
+
+// DiscoverAgentsFromMarkdown scans standard directories for agent markdown files
+// and registers any found agents. Scans: .morpheus/agent/, .opencode/agent/,
+// .morpheus/agents/, .opencode/agents/.
+func DiscoverAgentsFromMarkdown(workspaceRoot string) []*Agent {
+	var agents []*Agent
+
+	searchDirs := []string{
+		filepath.Join(workspaceRoot, ".morpheus", "agent"),
+		filepath.Join(workspaceRoot, ".morpheus", "agents"),
+		filepath.Join(workspaceRoot, ".opencode", "agent"),
+		filepath.Join(workspaceRoot, ".opencode", "agents"),
+	}
+
+	for _, dir := range searchDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				continue
+			}
+
+			agent, err := parseAgentMarkdown(string(data), entry.Name())
+			if err == nil && agent != nil {
+				agents = append(agents, agent)
+			}
+		}
+	}
+
+	return agents
+}
+
+func parseAgentMarkdown(content, filename string) (*Agent, error) {
+	matches := agentFrontmatterRE.FindStringSubmatch(content)
+	var fm agentFrontmatter
+	var promptContent string
+
+	if matches != nil {
+		if err := yaml.Unmarshal([]byte(matches[1]), &fm); err != nil {
+			return nil, fmt.Errorf("failed to parse agent frontmatter: %w", err)
+		}
+		promptContent = strings.TrimSpace(content[len(matches[0]):])
+	} else {
+		promptContent = strings.TrimSpace(content)
+	}
+
+	name := fm.Name
+	if name == "" {
+		name = strings.TrimSuffix(filename, ".md")
+	}
+
+	if name == "" {
+		return nil, fmt.Errorf("agent name is empty")
+	}
+
+	mode := AgentKindAll
+	switch fm.Mode {
+	case "primary":
+		mode = AgentKindPrimary
+	case "subagent":
+		mode = AgentKindSubAgent
+	}
+
+	modelOverride := &ModelOverride{}
+	if fm.Model != "" {
+		parts := strings.SplitN(fm.Model, "/", 2)
+		if len(parts) == 2 {
+			modelOverride.ProviderID = parts[0]
+			modelOverride.ModelID = parts[1]
+		}
+	}
+
+	return &Agent{
+		Name:        name,
+		Description: fm.Description,
+		Mode:        mode,
+		Hidden:      fm.Hidden,
+		Prompt:      promptContent,
+		Model:       modelOverride,
+		Permission:  defaultPermissionRules(),
+		Options:     make(map[string]any),
+	}, nil
+}
+
 func (r *AgentRegistry) ApplyConfig(cfg []config.AgentDefinition, workspaceRoot string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Discover agents from markdown files
+	mdAgents := DiscoverAgentsFromMarkdown(workspaceRoot)
+	for _, agent := range mdAgents {
+		if _, exists := r.agents[agent.Name]; !exists {
+			r.agents[agent.Name] = agent
+		}
+	}
 
 	skillDirs := []string{}
 	for _, dir := range skillDirs {

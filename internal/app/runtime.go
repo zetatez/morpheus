@@ -26,6 +26,7 @@ import (
 
 	"github.com/zetatez/morpheus/internal/app/prompts"
 	"github.com/zetatez/morpheus/internal/attestation"
+	"github.com/zetatez/morpheus/internal/command"
 	"github.com/zetatez/morpheus/internal/config"
 	"github.com/zetatez/morpheus/internal/configstore"
 	"github.com/zetatez/morpheus/internal/convo"
@@ -38,9 +39,10 @@ import (
 	"github.com/zetatez/morpheus/internal/skill"
 	"github.com/zetatez/morpheus/internal/subagent"
 	"github.com/zetatez/morpheus/internal/tools/agenttool"
+	"github.com/zetatez/morpheus/internal/tools/apply_patch"
 	"github.com/zetatez/morpheus/internal/tools/ask"
 	cmdtool "github.com/zetatez/morpheus/internal/tools/cmd"
-	"github.com/zetatez/morpheus/internal/tools/codesearch"
+
 	fstool "github.com/zetatez/morpheus/internal/tools/fs"
 	"github.com/zetatez/morpheus/internal/tools/lsp"
 	"github.com/zetatez/morpheus/internal/tools/mcp"
@@ -76,6 +78,8 @@ type Runtime struct {
 	sessionManager     *SessionManager
 	teamState          sync.Map
 	compactionPipeline *CompactionPipeline
+	commands           *command.CommandRegistry
+	directCommands     map[string]DirectCommandHandler
 }
 
 type AgentMode string
@@ -214,7 +218,9 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		metrics:        metrics,
 		runs:           newRunStore(),
 		sessionManager: NewSessionManager(),
+		commands:       initCommandRegistry(cfg.WorkspaceRoot),
 	}
+	rt.directCommands = initDirectCommands(rt)
 	rt.recoverRunsOnStartup(ctx)
 	if tool, ok := reg.Get("task"); ok {
 		if agent, ok := tool.(*agenttool.Tool); ok {
@@ -269,7 +275,7 @@ func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mc
 		webfetch.NewFetchTool(),
 		cmdtool.NewExecTool(cfg.WorkspaceRoot, 0),
 		websearch.NewTool(websearch.ProviderDuckDuckGo, ""),
-		codesearch.NewTool(codesearch.BackendSearchcode, "", ""),
+		apply_patch.NewTool(cfg.WorkspaceRoot, cfg.Permissions.FileSystem.MaxWriteSizeKB),
 	}
 }
 
@@ -952,6 +958,40 @@ func (rt *Runtime) longTermMemory(sessionID string) string {
 	return state.LongTerm
 }
 
+func (rt *Runtime) updateShortTermMemoryLightweight(sessionID string) {
+	messages := rt.conversation.Messages(sessionID)
+	if len(messages) == 0 {
+		return
+	}
+
+	var userMsgs []string
+	for _, msg := range messages {
+		if msg.Role == "user" && msg.Content != "" {
+			content := msg.Content
+			if len(content) > 80 {
+				content = content[:80] + "..."
+			}
+			userMsgs = append(userMsgs, content)
+		}
+	}
+
+	if len(userMsgs) == 0 {
+		return
+	}
+
+	var summary strings.Builder
+	summary.WriteString("Recent user requests:\n")
+	for i, msg := range userMsgs {
+		if i >= 5 {
+			summary.WriteString(fmt.Sprintf("- ... and %d more\n", len(userMsgs)-5))
+			break
+		}
+		summary.WriteString(fmt.Sprintf("- %s\n", msg))
+	}
+
+	rt.setShortTermMemory(sessionID, summary.String())
+}
+
 func (rt *Runtime) memorySystem(sessionID string) *MemorySystem {
 	sessionID = normalizeSessionID(sessionID)
 	state := rt.sessionManager.GetOrCreate(sessionID)
@@ -1378,6 +1418,18 @@ func (rt *Runtime) persistSession(ctx context.Context, sessionID string) error {
 	_ = rt.session.SaveMetadata(ctx, sessionID, meta)
 	if rt.sessionStore != nil {
 		_ = rt.sessionStore.SaveSession(ctx, sessionID, messages, summary, meta)
+		grants := rt.sessionManager.GetApprovedPermissions(sessionID)
+		if len(grants) > 0 {
+			sg := make([]session.ApprovedGrant, len(grants))
+			for i, g := range grants {
+				sg[i] = session.ApprovedGrant{
+					Permission: g.Permission,
+					Pattern:    g.Pattern,
+					CreatedAt:  g.CreatedAt,
+				}
+			}
+			_ = rt.sessionStore.SavePermissionGrants(ctx, sessionID, sg)
+		}
 	}
 	return nil
 }
@@ -1403,6 +1455,18 @@ func (rt *Runtime) LoadSession(ctx context.Context, sessionID string) error {
 				rt.setLongTermMemory(sessionID, stored.Metadata.LongTerm)
 			}
 			rt.restoreSessionMetadata(sessionID, stored.Metadata)
+			rt.syncMemoryToSession(sessionID)
+			if grants, err := rt.sessionStore.LoadPermissionGrants(ctx, sessionID); err == nil && len(grants) > 0 {
+				ap := make([]ApprovedPermission, len(grants))
+				for i, g := range grants {
+					ap[i] = ApprovedPermission{
+						Permission: g.Permission,
+						Pattern:    g.Pattern,
+						CreatedAt:  g.CreatedAt,
+					}
+				}
+				rt.sessionManager.SetApprovedPermissions(sessionID, ap)
+			}
 			return nil
 		}
 	}
@@ -1499,6 +1563,7 @@ func (rt *Runtime) LoadSession(ctx context.Context, sessionID string) error {
 		rt.setLongTermMemory(sessionID, longTerm)
 	}
 	rt.restoreSessionMetadata(sessionID, sess.Metadata)
+	rt.syncMemoryToSession(sessionID)
 	return nil
 }
 
@@ -1714,8 +1779,9 @@ const (
 	LongTermMaxBytes        = 12000
 )
 
-// checkAndCompress runs the 4-layer compression pipeline
-func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
+// checkAndCompress runs the 4-layer compression pipeline.
+// Returns true if compaction was performed.
+func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) bool {
 	pipeline := rt.compactionPipeline
 	if pipeline == nil {
 		pipeline = NewCompactionPipeline()
@@ -1725,7 +1791,7 @@ func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
 	ms := rt.memorySystem(sessionID)
 	messages := rt.conversation.Messages(sessionID)
 	if len(messages) == 0 {
-		return
+		return false
 	}
 
 	// Get turn count for constraint tracking
@@ -1751,10 +1817,12 @@ func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
 
 	// Check if further compression is needed
 	modelMaxTokens := rt.getModelMaxTokens()
+	compacted := false
+
 	if totalTokens < int64(float64(modelMaxTokens)*AutoCompactTriggerRatio) && !rt.isLongRunningTask(sessionID) {
 		// No compression needed
 		rt.conversation.ReplaceMessages(sessionID, messages)
-		return
+		return false
 	}
 
 	// Layer 2: Context folding
@@ -1771,6 +1839,7 @@ func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
 	}
 
 	// Layer 3: Auto-compaction (LLM summarization)
+	compacted = false
 	if pipeline.auto.ShouldTrigger(foldedTokens, int64(modelMaxTokens)) {
 		rt.logger.Info("auto-compaction triggered", zap.Int64("tokens", foldedTokens), zap.Int64("threshold", int64(float64(modelMaxTokens)*AutoCompactTriggerRatio)))
 
@@ -1785,14 +1854,20 @@ func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
 			memoryLines = append(memoryLines, entry.Content)
 		}
 
-		// Compact messages (keep recent)
-		recentCount := 4
-		if len(messages) > recentCount {
-			recent := messages[len(messages)-recentCount:]
-			old := messages[:len(messages)-recentCount]
+		// Use tail preservation: find N recent turns to keep verbatim
+		tail := pipeline.FindTail(messages, DefaultTailTurns, DefaultPreserveRecentTokens)
+		if tail != nil && tail.StartIndex > 0 {
+			// Split messages: old (to summarize) and tail (to preserve verbatim)
+			old := messages[:tail.StartIndex]
+			tailMessages := messages[tail.StartIndex:]
 
-			// Build compression prompt
-			compactPrompt := pipeline.auto.BuildCompactPrompt(old, constraints, strings.Join(memoryLines, "\n"))
+			var compactPrompt string
+			if len(old) > 0 {
+				compactPrompt = pipeline.BuildCompactPromptWithTail(messages, tail, constraints, strings.Join(memoryLines, "\n"))
+			} else {
+				compactPrompt = pipeline.auto.BuildCompactPrompt(old, constraints, strings.Join(memoryLines, "\n"))
+			}
+
 			summary, err := rt.generateSummary(ctx, compactPrompt)
 			if err == nil && summary != "" {
 				cleanSummary := strings.TrimSpace(summary)
@@ -1820,13 +1895,121 @@ func (rt *Runtime) checkAndCompress(ctx context.Context, sessionID string) {
 					})
 				}
 
-				messages = recent
+				// Add compaction metadata part to the first tail message
+				if len(tailMessages) > 0 {
+					compactionPart := sdk.MessagePart{
+						Type:        "compaction",
+						TailStartID: tail.StartID,
+						Auto:        true,
+						Overflow:    false,
+						Text:        "Previous conversation was compacted. The summary is preserved for context.",
+					}
+					tailMessages[0].Parts = append(tailMessages[0].Parts, compactionPart)
+				}
+
+				messages = tailMessages
+				compacted = true
 				_ = rt.session.SaveSummary(ctx, sessionID, cleanSummary)
+				_ = rt.session.SaveSummary(ctx, sessionID+"_tail_id", tail.StartID)
+			}
+		} else {
+			// Fallback to old behavior if tail not found
+			recentCount := 4
+			if len(messages) > recentCount {
+				recent := messages[len(messages)-recentCount:]
+				old := messages[:len(messages)-recentCount]
+
+				compactPrompt := pipeline.auto.BuildCompactPrompt(old, constraints, strings.Join(memoryLines, "\n"))
+				summary, err := rt.generateSummary(ctx, compactPrompt)
+				if err == nil && summary != "" {
+					cleanSummary := strings.TrimSpace(summary)
+					if existing := strings.TrimSpace(rt.conversation.Summary(sessionID)); existing != "" {
+						cleanSummary = existing + "\n\n" + cleanSummary
+					}
+					rt.conversation.SetSummary(sessionID, cleanSummary)
+					rt.setShortTermMemory(sessionID, trimMemory(cleanSummary, ShortTermMaxBytes))
+
+					longTerm := rt.longTermMemory(sessionID)
+					if longTerm != "" {
+						longTerm = strings.TrimSpace(longTerm + "\n\n---\n\n" + cleanSummary)
+					} else {
+						longTerm = cleanSummary
+					}
+					rt.setLongTermMemory(sessionID, trimMemory(longTerm, LongTermMaxBytes))
+
+					for _, c := range constraints {
+						ms.AddSemantic(MemoryEntry{
+							Layer:    MemoryLayerSemantic,
+							Content:  fmt.Sprintf("[Constraint from turn %d] %s", c.TurnNumber, c.Content),
+							Tags:     []string{"constraint", c.Source},
+							Metadata: map[string]any{"priority": c.Priority, "turn": c.TurnNumber},
+						})
+					}
+
+					messages = recent
+					compacted = true
+					_ = rt.session.SaveSummary(ctx, sessionID, cleanSummary)
+				}
 			}
 		}
 	}
 
 	rt.conversation.ReplaceMessages(sessionID, messages)
+	return compacted
+}
+
+// handleOverflowReplay checks if overflow replay is needed after compaction.
+// When the context was compacted due to overflow, this replays the last user message
+// (without media) so the model can continue working without re-requesting input.
+func (rt *Runtime) handleOverflowReplay(ctx context.Context, sessionID string, compacted bool) bool {
+	if !compacted {
+		return false
+	}
+
+	messages := rt.conversation.Messages(sessionID)
+	if len(messages) == 0 {
+		return false
+	}
+
+	// Find the last user message
+	var lastUserContent string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].Content != "" {
+			lastUserContent = messages[i].Content
+			break
+		}
+	}
+
+	if lastUserContent == "" {
+		return false
+	}
+
+	// Check if overflow replay was already done (look for the marker)
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, "[Overflow replay") {
+			return false
+		}
+	}
+
+	replayContent := fmt.Sprintf(
+		"[Overflow replay - continuing after context compaction]\n\nOriginal request: %s\n\nPlease continue working on the above request.",
+		lastUserContent,
+	)
+
+	part := sdk.MessagePart{
+		Type: "text",
+		Text: replayContent,
+	}
+
+	_, err := rt.appendMessage(ctx, sessionID, "system", replayContent, []sdk.MessagePart{part})
+	if err != nil {
+		rt.logger.Warn("failed to append overflow replay message", zap.Error(err))
+		return false
+	}
+
+	rt.logger.Info("overflow replay injected after compaction",
+		zap.String("sessionID", sessionID))
+	return true
 }
 
 func (rt *Runtime) buildTaskContext(sessionID string) string {
@@ -2139,30 +2322,39 @@ Guidelines (accuracy first):
 1. Understand WHY it failed
 2. Fix the root cause, not symptoms
 3. Use correct tool and inputs:
-   - agent.run: {"prompt": "delegated task"}
-   - conversation.ask: {"question": "question", "options": ["option 1", "option 2"], "multiple": false}
-   - fs.read: {"path": "file path", "offset": 1, "limit": 200}
-   - fs.write: {"path": "file path", "content": "content"}
-   - fs.edit: {"path": "file path", "old_string": "old", "new_string": "new", "replace_all": false}
-   - fs.glob: {"pattern": "glob pattern"}
-   - fs.grep: {"pattern": "text"}
-   - lsp.query: {"action": "definition|typeDefinition|references|hover|implementations|symbols|documentSymbols|callHierarchy|diagnostics|rename|codeAction|capabilities|workspaceFolders|addWorkspaceRoot|removeWorkspaceRoot|status|restart|shutdown", "path": "file path", "line": 1, "column": 1, "newName": "optional rename target"}
-   - mcp.query: {"action": "connect|disconnect|servers|tools|resources|readResource|subscribe", "name": "server name", "transport": "stdio|http|sse", "command": "launch command", "url": "remote endpoint", "uri": "resource uri"}
-   - skill.invoke: {"name": "skill-name", "input": {}}
-   - cmd.exec: {"command": "shell command"}
-4. Combine with && or ; when appropriate
-5. Do not require interactive input or selection; choose a safe default
-6. Before fs.read, verify path exists using fs.glob
-7. Prefer fs.grep first, then fs.read with offset/limit to inspect only the relevant lines
-8. Keep fs.read limit small and never exceed 400 lines in one read
-9. Only use conversation.ask when you are truly blocked and need a targeted clarification
-10. Use skill.invoke only when the user explicitly asked for a skill
-11. Prefer fs.edit for precise changes; use fs.write only for full-file creation or full replacement
-12. Keep user-facing replies precise, brief, clear, and necessary; avoid filler and repetition
-13. When writing code, prefer solutions that are short, elegant, efficient, and readable
-14. Add comments only when they are necessary to explain non-obvious logic
-15. Prefer lsp.query for definitions, type info, references, symbols, document symbols, implementations, hierarchy, diagnostics, and code actions before falling back to grep-only navigation
-16. Output valid JSON: {"summary": "...", "steps": [...], "risks": []}`, originalInput, failedStep, errorMsg)
+   - todowrite: {"todos": [{"status": "in_progress|completed", "content": "task description"}]}
+   - bash: {"command": "shell command"}
+   - glob: {"pattern": "glob pattern"}
+   - grep: {"pattern": "text", "include": "file pattern filter"}
+   - read: {"path": "file path", "offset": 1, "limit": 200}
+   - write: {"path": "file path", "content": "content"}
+   - edit: {"path": "file path", "old_string": "old", "new_string": "new", "replace_all": false}
+   - lsp: {"action": "definition|typeDefinition|references|hover|implementations|symbols|documentSymbols|callHierarchy|diagnostics|rename|codeAction|capabilities|workspaceFolders|addWorkspaceRoot|removeWorkspaceRoot|status|restart|shutdown", "path": "file path", "line": 1, "column": 1, "newName": "optional rename target"}
+   - webfetch: {"url": "url to fetch"}
+   - websearch: {"query": "search query", "max_results": 10}
+   - question: {"question": "question", "options": ["option 1", "option 2"], "multiple": false}
+   - mcp: {"action": "connect|disconnect|servers|tools|resources|readResource|subscribe", "name": "server name", "transport": "stdio|http|sse", "command": "launch command", "url": "remote endpoint", "uri": "resource uri"}
+   - skill: {"name": "skill-name", "input": {}}
+   - task: {"prompt": "delegated task"}
+   - agent.coordinate: {"task": "task description"}
+   - agent.message: {"to": "agent name", "message": "message content"}
+4. Think independently: use tools to explore and understand the codebase yourself. Do not ask the user for clarification unless truly blocked.
+5. Verify before claiming: run tests, check git history, inspect code rather than assuming or guessing.
+6. Iterate actively: try an approach, observe results, adjust. Do not wait for perfect understanding before acting.
+7. Prefer bash for almost everything: file ops, git, tests, builds, JSON parsing, network checks
+8. Combine with && or ; when appropriate
+9. Before read, verify path exists using glob
+10. Prefer grep first, then read with offset/limit to inspect only the relevant lines
+11. Keep read limit small and never exceed 400 lines in one read
+12. Only use question when you are truly blocked and need a targeted clarification
+13. Use skill only when the user explicitly asked for a skill
+14. Prefer edit for precise changes; use write only for full-file creation or full replacement
+15. Keep user-facing replies precise, brief, clear, and necessary; avoid filler and repetition
+16. When writing code, prefer solutions that are short, elegant, efficient, and readable
+17. Add comments only when they are necessary to explain non-obvious logic
+18. Prefer lsp for definitions, type info, references, symbols, document symbols, implementations, hierarchy, diagnostics, and code actions before falling back to grep-only navigation
+19. Use tools proactively to explore, verify, and solve problems rather than asking the user
+20. Output valid JSON: {"summary": "...", "steps": [...], "risks": []}`, originalInput, failedStep, errorMsg)
 
 	planReq := sdk.PlanRequest{
 		ConversationID: sessionID,
@@ -2707,6 +2899,7 @@ func (s *APIServer) registerRoutes() {
 	s.mux.HandleFunc("/models/select", s.handleModelSelect)
 	s.mux.HandleFunc("/runs/", s.handleRuns)
 	s.mux.HandleFunc("/runs/{id}", s.handleRunByID)
+	s.mux.HandleFunc("/commands", s.handleCommands)
 	s.mux.HandleFunc("/repl", s.wrapLimited("repl", s.handleRepl))
 	s.mux.HandleFunc("/repl/stream", s.wrapLimited("repl_stream", s.handleReplStream))
 	s.mux.HandleFunc("/vim", s.handleRemoteFile)
@@ -3128,7 +3321,7 @@ func (s *APIServer) handleReplStream(w http.ResponseWriter, r *http.Request) {
 			"mode":       string(mode),
 		},
 	})
-	resp, err := s.runtime.AgentLoopStream(r.Context(), body.Session, UserInput{Text: body.Input, Attachments: body.Attachments}, body.Format, mode, emit)
+	resp, err := s.runtime.AgentLoopStreamV2(r.Context(), body.Session, UserInput{Text: body.Input, Attachments: body.Attachments}, body.Format, mode, emit)
 	if err != nil {
 		_ = emit("error", map[string]any{"error": err.Error()})
 		return
@@ -3414,7 +3607,10 @@ func (s *APIServer) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 type SessionInfo struct {
 	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Summary   string    `json:"summary,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
@@ -3437,7 +3633,21 @@ func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
 			if createdAt.IsZero() {
 				createdAt = time.Now().UTC()
 			}
-			sessions = append(sessions, SessionInfo{ID: meta.SessionID, CreatedAt: createdAt})
+			title := meta.SessionID
+			if meta.Summary != "" {
+				lines := strings.Split(meta.Summary, "\n")
+				title = strings.TrimSpace(lines[0])
+				if len(title) > 60 {
+					title = title[:57] + "..."
+				}
+			}
+			sessions = append(sessions, SessionInfo{
+				ID:        meta.SessionID,
+				Title:     title,
+				Summary:   meta.Summary,
+				CreatedAt: createdAt,
+				UpdatedAt: createdAt,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": sessions})
@@ -3466,7 +3676,9 @@ func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		}
 		sessions = append(sessions, SessionInfo{
 			ID:        entry.Name(),
+			Title:     entry.Name(),
 			CreatedAt: info.ModTime(),
+			UpdatedAt: info.ModTime(),
 		})
 	}
 
@@ -3775,6 +3987,37 @@ type ChatRequest struct {
 	Attachments []InputAttachment `json:"attachments,omitempty"`
 	Format      *OutputFormat     `json:"format,omitempty"`
 	Mode        string            `json:"mode,omitempty"`
+}
+
+type CommandInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source"`
+	Hints       []string `json:"hints,omitempty"`
+}
+
+func (s *APIServer) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.runtime.commands == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]CommandInfo{})
+		return
+	}
+	cmds := s.runtime.commands.List()
+	out := make([]CommandInfo, 0, len(cmds))
+	for _, c := range cmds {
+		out = append(out, CommandInfo{
+			Name:        c.Name,
+			Description: c.Description,
+			Source:      string(c.Source),
+			Hints:       c.Hints,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *APIServer) handleChat(w http.ResponseWriter, r *http.Request) {

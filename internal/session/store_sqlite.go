@@ -31,15 +31,15 @@ type StoredSession struct {
 
 // RunCheckpoint represents a checkpoint for recovering long-running tasks
 type RunCheckpoint struct {
-	ID            string    // Unique checkpoint ID
-	RunID         string    // The run this checkpoint belongs to
-	StepID        string    // The step ID at checkpoint time
-	Reason        string    // Why the checkpoint was created (step_complete, manual, periodic, before_risky)
-	MessagesJSON   []byte   // Serialized message history
-	MemoryJSON     []byte   // Serialized working memory state
-	ToolResultsJSON []byte  // Serialized tool results up to this point
-	PlanJSON       []byte   // Serialized plan state at checkpoint
-	CreatedAt      time.Time
+	ID              string // Unique checkpoint ID
+	RunID           string // The run this checkpoint belongs to
+	StepID          string // The step ID at checkpoint time
+	Reason          string // Why the checkpoint was created (step_complete, manual, periodic, before_risky)
+	MessagesJSON    []byte // Serialized message history
+	MemoryJSON      []byte // Serialized working memory state
+	ToolResultsJSON []byte // Serialized tool results up to this point
+	PlanJSON        []byte // Serialized plan state at checkpoint
+	CreatedAt       time.Time
 }
 
 // CheckpointReason constants
@@ -117,6 +117,15 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			created_at TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id, created_at DESC);`,
+		`CREATE TABLE IF NOT EXISTS permission_grants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			permission TEXT NOT NULL,
+			pattern TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			UNIQUE(session_id, permission, pattern)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_perm_grants_session ON permission_grants(session_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -328,6 +337,70 @@ func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 	return err
+}
+
+type ApprovedGrant struct {
+	Permission string
+	Pattern    string
+	CreatedAt  time.Time
+}
+
+func (s *Store) SavePermissionGrants(ctx context.Context, sessionID string, grants []ApprovedGrant) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM permission_grants WHERE session_id = ?`, sessionID); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO permission_grants (session_id, permission, pattern, created_at) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, g := range grants {
+		ts := g.CreatedAt
+		if ts.IsZero() {
+			ts = time.Now().UTC()
+		}
+		if _, err = stmt.ExecContext(ctx, sessionID, g.Permission, g.Pattern, ts.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) LoadPermissionGrants(ctx context.Context, sessionID string) ([]ApprovedGrant, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT permission, pattern, created_at FROM permission_grants WHERE session_id = ? ORDER BY id ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ApprovedGrant
+	for rows.Next() {
+		var g ApprovedGrant
+		var tsRaw string
+		if err := rows.Scan(&g.Permission, &g.Pattern, &tsRaw); err != nil {
+			continue
+		}
+		g.CreatedAt, _ = time.Parse(time.RFC3339Nano, tsRaw)
+		out = append(out, g)
+	}
+	if out == nil {
+		out = []ApprovedGrant{}
+	}
+	return out, nil
 }
 
 func (s *Store) HasSession(ctx context.Context, sessionID string) bool {

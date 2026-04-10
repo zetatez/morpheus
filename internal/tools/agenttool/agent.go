@@ -36,7 +36,7 @@ func (t *Tool) Schema() map[string]any {
 			"tools": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Optional list of allowed tools (e.g., [\"fs.read\", \"cmd.exec\"])",
+				"description": "Optional list of allowed tools (e.g., [\"read\", \"bash\"])",
 			},
 			"background": map[string]any{
 				"type":        "boolean",
