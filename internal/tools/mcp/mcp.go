@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,9 @@ type Manager struct {
 	cachePath        string
 	onResourceUpdate func(server, uri string, payload map[string]any)
 	namer            *ToolNamer
+	authStore        *AuthStore
+	oauthProviders   map[string]*McpOAuthProvider
+	onOAuthRedirect  func(mcpName string, authURL *url.URL) error
 }
 
 // ToolNamingStyle defines how MCP tool names are formatted
@@ -38,7 +42,7 @@ const (
 	FullQualified ToolNamingStyle = iota
 	// Flat: filesystem_read (no prefix, underscores)
 	Flat
-	// Compact: fs.read (abbreviated server, dot separator)
+	// Compact: read (abbreviated server, dot separator)
 	Compact
 	// DoubleColon: mcp::filesystem::read (double colon for clarity)
 	DoubleColon
@@ -230,9 +234,9 @@ func (m *Manager) GetServerCapabilities(name string) ServerCapabilities {
 
 // ServerCapabilities describes what a server supports
 type ServerCapabilities struct {
-	Tools                   bool
-	Resources               bool
-	ResourceSubscription    bool
+	Tools                bool
+	Resources            bool
+	ResourceSubscription bool
 }
 
 type ServerConfig struct {
@@ -243,6 +247,7 @@ type ServerConfig struct {
 	SSEURL     string
 	AuthToken  string
 	AuthHeader string
+	OAuth      OAuthConfig
 }
 
 type ProxyTool struct {
@@ -281,26 +286,46 @@ type stdioTransport struct {
 }
 
 type httpTransport struct {
-	url     string
-	client  *http.Client
-	mu      sync.Mutex
-	seq     int64
-	sseURL  string
-	headers map[string]string
+	url           string
+	client        *http.Client
+	mu            sync.Mutex
+	seq           int64
+	sseURL        string
+	headers       map[string]string
+	oauthProvider *McpOAuthProvider
 }
 
 func NewManager(cachePath string) *Manager {
 	return &Manager{
-		clients: map[string]*client{},
-		tools:   map[string]*ProxyTool{},
-		cachePath: cachePath,
-		namer:    NewToolNamer(Compact), // Default to compact naming for cleaner LLM consumption
+		clients:        map[string]*client{},
+		tools:          map[string]*ProxyTool{},
+		cachePath:      cachePath,
+		namer:          NewToolNamer(Compact),
+		oauthProviders: map[string]*McpOAuthProvider{},
 	}
+}
+
+func NewManagerWithAuthStore(cachePath, dataDir string) (*Manager, error) {
+	store, err := NewAuthStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Manager{
+		clients:        map[string]*client{},
+		tools:          map[string]*ProxyTool{},
+		cachePath:      cachePath,
+		namer:          NewToolNamer(Compact),
+		authStore:      store,
+		oauthProviders: map[string]*McpOAuthProvider{},
+	}, nil
 }
 
 func (m *Manager) SetOnChange(fn func() error) { m.onChange = fn }
 func (m *Manager) SetOnResourceUpdate(fn func(server, uri string, payload map[string]any)) {
 	m.onResourceUpdate = fn
+}
+func (m *Manager) SetOnOAuthRedirect(fn func(mcpName string, authURL *url.URL) error) {
+	m.onOAuthRedirect = fn
 }
 
 // SetNamingStyle configures the tool naming style
@@ -315,7 +340,7 @@ func (m *Manager) GetNamingStyle() ToolNamingStyle {
 
 func NewControlTool(m *Manager) *ControlTool { return &ControlTool{manager: m} }
 
-func (t *ControlTool) Name() string { return "mcp.query" }
+func (t *ControlTool) Name() string { return "mcp" }
 func (t *ControlTool) Describe() string {
 	return "Manage MCP servers, inspect tools/resources, and subscribe to MCP resources."
 }
@@ -389,7 +414,21 @@ func (m *Manager) connect(ctx context.Context, cfg ServerConfig) (sdk.ToolResult
 	if cfg.Transport == "" {
 		cfg.Transport = "stdio"
 	}
-	tr, err := newTransport(ctx, cfg)
+
+	var oauthProvider *McpOAuthProvider
+	if m.authStore != nil && cfg.OAuth.AuthURL != "" && cfg.OAuth.TokenURL != "" {
+		oauthProvider = NewMcpOAuthProvider(cfg.Name, cfg.URL, cfg.OAuth, m.authStore, func(authURL *url.URL) error {
+			if m.onOAuthRedirect != nil {
+				return m.onOAuthRedirect(cfg.Name, authURL)
+			}
+			return nil
+		})
+		m.mu.Lock()
+		m.oauthProviders[cfg.Name] = oauthProvider
+		m.mu.Unlock()
+	}
+
+	tr, err := newTransport(ctx, cfg, oauthProvider)
 	if err != nil {
 		return sdk.ToolResult{Success: false}, err
 	}
@@ -668,12 +707,12 @@ func (c *client) initialize(ctx context.Context) error {
 	return c.transport.Notify(ctx, "notifications/initialized", map[string]any{})
 }
 
-func newTransport(ctx context.Context, cfg ServerConfig) (transport, error) {
+func newTransport(ctx context.Context, cfg ServerConfig, oauthProvider *McpOAuthProvider) (transport, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Transport)) {
 	case "", "stdio":
 		return newStdioTransport(ctx, cfg.Command)
 	case "http", "sse":
-		tr := newHTTPTransport(cfg.URL, cfg.SSEURL)
+		tr := newHTTPTransport(cfg.URL, cfg.SSEURL, oauthProvider)
 		header := strings.TrimSpace(cfg.AuthHeader)
 		if header == "" {
 			header = "Authorization"
@@ -706,8 +745,14 @@ func newStdioTransport(ctx context.Context, command string) (*stdioTransport, er
 	return &stdioTransport{cmd: cmd, in: in, out: bufio.NewReader(out)}, nil
 }
 
-func newHTTPTransport(url, sseURL string) *httpTransport {
-	return &httpTransport{url: strings.TrimSpace(url), sseURL: strings.TrimSpace(sseURL), client: &http.Client{Timeout: 30 * time.Second}, headers: map[string]string{}}
+func newHTTPTransport(url, sseURL string, oauthProvider *McpOAuthProvider) *httpTransport {
+	return &httpTransport{
+		url:           strings.TrimSpace(url),
+		sseURL:        strings.TrimSpace(sseURL),
+		client:        &http.Client{Timeout: 30 * time.Second},
+		headers:       map[string]string{},
+		oauthProvider: oauthProvider,
+	}
 }
 
 func (t *stdioTransport) Call(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
@@ -766,6 +811,12 @@ func (t *stdioTransport) write(msg map[string]any) error {
 }
 
 func (t *httpTransport) Call(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+	if t.oauthProvider != nil {
+		if err := t.ensureValidToken(ctx); err != nil {
+			return nil, err
+		}
+	}
+
 	t.mu.Lock()
 	t.seq++
 	id := t.seq
@@ -778,6 +829,12 @@ func (t *httpTransport) Call(ctx context.Context, method string, params map[stri
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
+	}
+	if t.oauthProvider != nil {
+		token, _ := t.oauthProvider.AccessToken(ctx)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -793,6 +850,30 @@ func (t *httpTransport) Call(ctx context.Context, method string, params map[stri
 	}
 	result, _ := msg["result"].(map[string]any)
 	return result, nil
+}
+
+func (t *httpTransport) ensureValidToken(ctx context.Context) error {
+	expired, err := t.oauthProvider.store.IsTokenExpired(t.oauthProvider.mcpName)
+	if err != nil {
+		return err
+	}
+	if !expired {
+		return nil
+	}
+
+	tokens, err := t.oauthProvider.Tokens(ctx)
+	if err != nil {
+		return err
+	}
+	if tokens == nil || tokens.RefreshToken == "" {
+		return fmt.Errorf("no refresh token available for MCP server: %s", t.oauthProvider.mcpName)
+	}
+
+	newTokens, err := t.oauthProvider.RefreshAccessToken(ctx, tokens.RefreshToken)
+	if err != nil {
+		return err
+	}
+	return t.oauthProvider.SaveTokens(ctx, newTokens)
 }
 
 func (t *httpTransport) Notify(ctx context.Context, method string, params map[string]any) error {

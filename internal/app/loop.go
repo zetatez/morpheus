@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/zetatez/morpheus/internal/exec"
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
 
@@ -226,8 +227,8 @@ func (rl *runLoop) RunWithDeadline(ctx context.Context, sessionID string, messag
 	rl.processor.SetCallbacks(ProcessorCallbacks{
 		OnToolCall: func(index int, name, id string, args map[string]interface{}) {
 			if rl.callbacks.OnEmit != nil {
-				_ = rl.callbacks.OnEmit("tool_call", map[string]interface{}{
-					"index": index, "name": name, "id": id, "args": args,
+				_ = rl.callbacks.OnEmit("tool_pending", map[string]interface{}{
+					"tool": name, "input": args, "call_id": id,
 				})
 			}
 		},
@@ -292,7 +293,9 @@ func (rl *runLoop) RunWithDeadline(ctx context.Context, sessionID string, messag
 			return LoopResult{Status: LoopStatusStop, Error: fmt.Errorf("OnCallChat not implemented")}, fmt.Errorf("OnCallChat not implemented")
 		}
 
+		rl.logger.Info("calling OnCallChat", zap.Int("step", step), zap.Int("msgCount", len(messagesForLLM)), zap.Int("toolCount", len(tools)))
 		resp, err := rl.callbacks.OnCallChat(ctx, messagesForLLM, tools, nil, rl.callbacks.OnEmit)
+		rl.logger.Info("OnCallChat returned", zap.Int("step", step), zap.Duration("elapsed", time.Since(rl.startTime)), zap.Error(err))
 		if err != nil {
 			return LoopResult{Status: LoopStatusStop, Error: err}, err
 		}
@@ -350,12 +353,13 @@ func (rl *runLoop) RunWithDeadline(ctx context.Context, sessionID string, messag
 		if len(resp.ToolCalls) > 0 {
 			tcPayload := make([]map[string]interface{}, len(resp.ToolCalls))
 			for i, tc := range resp.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
 				tcPayload[i] = map[string]interface{}{
 					"id":   tc.ID,
 					"type": "function",
 					"function": map[string]interface{}{
 						"name":      tc.Name,
-						"arguments": tc.Arguments,
+						"arguments": string(argsJSON),
 					},
 				}
 			}
@@ -377,13 +381,50 @@ func (rl *runLoop) RunWithDeadline(ctx context.Context, sessionID string, messag
 			if isDoomLoop {
 				rl.doomLoopCount++
 				rl.logger.Warn("doom loop detected", zap.String("tool", tc.Name), zap.Int("count", rl.doomLoopCount))
+				if rl.doomLoopCount >= 10 {
+					return LoopResult{
+						Status: LoopStatusStop,
+						Error:  fmt.Errorf("stopped due to repeated tool calls (%s x%d)", tc.Name, rl.doomLoopCount),
+					}, nil
+				}
 				injectDoomLoopWarning(messages, tc.Name, tc.Arguments)
 				rl.doomLoop.Reset(sessionID)
 				continue
 			}
 
-			result := rl.executeWithRetry(ctx, sessionID, planStep)
+			result, confErr := rl.executeWithRetry(ctx, sessionID, planStep)
 			result.StepID = stepID
+			rl.logger.Info("executeWithRetry returned", zap.String("tool", tc.Name), zap.Bool("success", result.Success), zap.Error(confErr))
+
+			if confErr != nil {
+				creq, _ := exec.IsConfirmationRequired(confErr)
+				pending := PendingConfirmation{
+					Tool:      creq.Tool,
+					Inputs:    creq.Inputs,
+					Decision:  creq.Decision,
+					Kind:      "tool_confirmation",
+					CreatedAt: time.Now(),
+				}
+				return LoopResult{
+					Status:       LoopStatusNeedsConfirmation,
+					Confirmation: &pending,
+				}, nil
+			}
+
+			if rl.callbacks.OnEmit != nil {
+				step := map[string]interface{}{
+					"id":          planStep.ID,
+					"description": planStep.Description,
+					"tool":        planStep.Tool,
+					"inputs":      planStep.Inputs,
+					"status":      "completed",
+				}
+				_ = rl.callbacks.OnEmit("tool_result", map[string]interface{}{
+					"call_id": tc.ID,
+					"step":    step,
+					"result":  result,
+				})
+			}
 
 			results = append(results, result)
 
@@ -499,7 +540,7 @@ func (rl *runLoop) executeToolCall(ctx context.Context, sessionID string, call m
 		}
 	}
 
-	if rl.callbacks.OnToolExecute != nil {
+	if rl.callbacks.OnToolExecute == nil {
 		return sdk.ToolResult{Success: false, Error: "OnToolExecute not implemented"}
 	}
 
@@ -577,20 +618,23 @@ func hashResult(data map[string]interface{}) uint64 {
 	return hash
 }
 
-func (rl *runLoop) executeWithRetry(ctx context.Context, sessionID string, planStep sdk.PlanStep) sdk.ToolResult {
+func (rl *runLoop) executeWithRetry(ctx context.Context, sessionID string, planStep sdk.PlanStep) (sdk.ToolResult, error) {
 	var lastResult sdk.ToolResult
 	backoffMs := RETRY_BACKOFF_BASE_MS
 
 	for attempt := 0; attempt <= MAX_RETRY_ATTEMPTS; attempt++ {
 		result, err := rl.toolHandler.Execute(ctx, sessionID, planStep)
 		if err != nil {
+			if creq, ok := exec.IsConfirmationRequired(err); ok {
+				return sdk.ToolResult{Success: false, Error: err.Error()}, creq
+			}
 			lastResult = sdk.ToolResult{Success: false, Error: err.Error()}
 		} else {
 			lastResult = result
 		}
 
 		if lastResult.Success {
-			return lastResult
+			return lastResult, nil
 		}
 
 		if attempt < MAX_RETRY_ATTEMPTS && isRetryableError(lastResult.Error) {
@@ -602,9 +646,9 @@ func (rl *runLoop) executeWithRetry(ctx context.Context, sessionID string, planS
 			}
 			continue
 		}
-		return lastResult
+		return lastResult, nil
 	}
-	return lastResult
+	return lastResult, nil
 }
 
 func injectDoomLoopWarning(messages []map[string]interface{}, toolName string, args map[string]interface{}) {

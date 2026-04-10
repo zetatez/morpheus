@@ -40,7 +40,7 @@ import (
 	"github.com/zetatez/morpheus/internal/tools/agenttool"
 	"github.com/zetatez/morpheus/internal/tools/ask"
 	cmdtool "github.com/zetatez/morpheus/internal/tools/cmd"
-	"github.com/zetatez/morpheus/internal/tools/codesearch"
+
 	fstool "github.com/zetatez/morpheus/internal/tools/fs"
 	"github.com/zetatez/morpheus/internal/tools/lsp"
 	"github.com/zetatez/morpheus/internal/tools/mcp"
@@ -269,7 +269,6 @@ func buildAvailableTools(cfg config.Config, skills *skill.Loader, mcpManager *mc
 		webfetch.NewFetchTool(),
 		cmdtool.NewExecTool(cfg.WorkspaceRoot, 0),
 		websearch.NewTool(websearch.ProviderDuckDuckGo, ""),
-		codesearch.NewTool(codesearch.BackendSearchcode, "", ""),
 	}
 }
 
@@ -952,6 +951,40 @@ func (rt *Runtime) longTermMemory(sessionID string) string {
 	return state.LongTerm
 }
 
+func (rt *Runtime) updateShortTermMemoryLightweight(sessionID string) {
+	messages := rt.conversation.Messages(sessionID)
+	if len(messages) == 0 {
+		return
+	}
+
+	var userMsgs []string
+	for _, msg := range messages {
+		if msg.Role == "user" && msg.Content != "" {
+			content := msg.Content
+			if len(content) > 80 {
+				content = content[:80] + "..."
+			}
+			userMsgs = append(userMsgs, content)
+		}
+	}
+
+	if len(userMsgs) == 0 {
+		return
+	}
+
+	var summary strings.Builder
+	summary.WriteString("Recent user requests:\n")
+	for i, msg := range userMsgs {
+		if i >= 5 {
+			summary.WriteString(fmt.Sprintf("- ... and %d more\n", len(userMsgs)-5))
+			break
+		}
+		summary.WriteString(fmt.Sprintf("- %s\n", msg))
+	}
+
+	rt.setShortTermMemory(sessionID, summary.String())
+}
+
 func (rt *Runtime) memorySystem(sessionID string) *MemorySystem {
 	sessionID = normalizeSessionID(sessionID)
 	state := rt.sessionManager.GetOrCreate(sessionID)
@@ -1403,6 +1436,7 @@ func (rt *Runtime) LoadSession(ctx context.Context, sessionID string) error {
 				rt.setLongTermMemory(sessionID, stored.Metadata.LongTerm)
 			}
 			rt.restoreSessionMetadata(sessionID, stored.Metadata)
+			rt.syncMemoryToSession(sessionID)
 			return nil
 		}
 	}
@@ -1499,6 +1533,7 @@ func (rt *Runtime) LoadSession(ctx context.Context, sessionID string) error {
 		rt.setLongTermMemory(sessionID, longTerm)
 	}
 	rt.restoreSessionMetadata(sessionID, sess.Metadata)
+	rt.syncMemoryToSession(sessionID)
 	return nil
 }
 
@@ -2139,30 +2174,39 @@ Guidelines (accuracy first):
 1. Understand WHY it failed
 2. Fix the root cause, not symptoms
 3. Use correct tool and inputs:
-   - agent.run: {"prompt": "delegated task"}
-   - conversation.ask: {"question": "question", "options": ["option 1", "option 2"], "multiple": false}
-   - fs.read: {"path": "file path", "offset": 1, "limit": 200}
-   - fs.write: {"path": "file path", "content": "content"}
-   - fs.edit: {"path": "file path", "old_string": "old", "new_string": "new", "replace_all": false}
-   - fs.glob: {"pattern": "glob pattern"}
-   - fs.grep: {"pattern": "text"}
-   - lsp.query: {"action": "definition|typeDefinition|references|hover|implementations|symbols|documentSymbols|callHierarchy|diagnostics|rename|codeAction|capabilities|workspaceFolders|addWorkspaceRoot|removeWorkspaceRoot|status|restart|shutdown", "path": "file path", "line": 1, "column": 1, "newName": "optional rename target"}
-   - mcp.query: {"action": "connect|disconnect|servers|tools|resources|readResource|subscribe", "name": "server name", "transport": "stdio|http|sse", "command": "launch command", "url": "remote endpoint", "uri": "resource uri"}
-   - skill.invoke: {"name": "skill-name", "input": {}}
-   - cmd.exec: {"command": "shell command"}
-4. Combine with && or ; when appropriate
-5. Do not require interactive input or selection; choose a safe default
-6. Before fs.read, verify path exists using fs.glob
-7. Prefer fs.grep first, then fs.read with offset/limit to inspect only the relevant lines
-8. Keep fs.read limit small and never exceed 400 lines in one read
-9. Only use conversation.ask when you are truly blocked and need a targeted clarification
-10. Use skill.invoke only when the user explicitly asked for a skill
-11. Prefer fs.edit for precise changes; use fs.write only for full-file creation or full replacement
-12. Keep user-facing replies precise, brief, clear, and necessary; avoid filler and repetition
-13. When writing code, prefer solutions that are short, elegant, efficient, and readable
-14. Add comments only when they are necessary to explain non-obvious logic
-15. Prefer lsp.query for definitions, type info, references, symbols, document symbols, implementations, hierarchy, diagnostics, and code actions before falling back to grep-only navigation
-16. Output valid JSON: {"summary": "...", "steps": [...], "risks": []}`, originalInput, failedStep, errorMsg)
+   - todowrite: {"todos": [{"status": "in_progress|completed", "content": "task description"}]}
+   - bash: {"command": "shell command"}
+   - glob: {"pattern": "glob pattern"}
+   - grep: {"pattern": "text", "include": "file pattern filter"}
+   - read: {"path": "file path", "offset": 1, "limit": 200}
+   - write: {"path": "file path", "content": "content"}
+   - edit: {"path": "file path", "old_string": "old", "new_string": "new", "replace_all": false}
+   - lsp: {"action": "definition|typeDefinition|references|hover|implementations|symbols|documentSymbols|callHierarchy|diagnostics|rename|codeAction|capabilities|workspaceFolders|addWorkspaceRoot|removeWorkspaceRoot|status|restart|shutdown", "path": "file path", "line": 1, "column": 1, "newName": "optional rename target"}
+   - webfetch: {"url": "url to fetch"}
+   - websearch: {"query": "search query", "max_results": 10}
+   - question: {"question": "question", "options": ["option 1", "option 2"], "multiple": false}
+   - mcp: {"action": "connect|disconnect|servers|tools|resources|readResource|subscribe", "name": "server name", "transport": "stdio|http|sse", "command": "launch command", "url": "remote endpoint", "uri": "resource uri"}
+   - skill: {"name": "skill-name", "input": {}}
+   - task: {"prompt": "delegated task"}
+   - agent.coordinate: {"task": "task description"}
+   - agent.message: {"to": "agent name", "message": "message content"}
+4. Think independently: use tools to explore and understand the codebase yourself. Do not ask the user for clarification unless truly blocked.
+5. Verify before claiming: run tests, check git history, inspect code rather than assuming or guessing.
+6. Iterate actively: try an approach, observe results, adjust. Do not wait for perfect understanding before acting.
+7. Prefer bash for almost everything: file ops, git, tests, builds, JSON parsing, network checks
+8. Combine with && or ; when appropriate
+9. Before read, verify path exists using glob
+10. Prefer grep first, then read with offset/limit to inspect only the relevant lines
+11. Keep read limit small and never exceed 400 lines in one read
+12. Only use question when you are truly blocked and need a targeted clarification
+13. Use skill only when the user explicitly asked for a skill
+14. Prefer edit for precise changes; use write only for full-file creation or full replacement
+15. Keep user-facing replies precise, brief, clear, and necessary; avoid filler and repetition
+16. When writing code, prefer solutions that are short, elegant, efficient, and readable
+17. Add comments only when they are necessary to explain non-obvious logic
+18. Prefer lsp for definitions, type info, references, symbols, document symbols, implementations, hierarchy, diagnostics, and code actions before falling back to grep-only navigation
+19. Use tools proactively to explore, verify, and solve problems rather than asking the user
+20. Output valid JSON: {"summary": "...", "steps": [...], "risks": []}`, originalInput, failedStep, errorMsg)
 
 	planReq := sdk.PlanRequest{
 		ConversationID: sessionID,
@@ -3128,7 +3172,7 @@ func (s *APIServer) handleReplStream(w http.ResponseWriter, r *http.Request) {
 			"mode":       string(mode),
 		},
 	})
-	resp, err := s.runtime.AgentLoopStream(r.Context(), body.Session, UserInput{Text: body.Input, Attachments: body.Attachments}, body.Format, mode, emit)
+	resp, err := s.runtime.AgentLoopStreamV2(r.Context(), body.Session, UserInput{Text: body.Input, Attachments: body.Attachments}, body.Format, mode, emit)
 	if err != nil {
 		_ = emit("error", map[string]any{"error": err.Error()})
 		return
@@ -3414,7 +3458,10 @@ func (s *APIServer) handleExecute(w http.ResponseWriter, r *http.Request) {
 
 type SessionInfo struct {
 	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Summary   string    `json:"summary,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
@@ -3437,7 +3484,21 @@ func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
 			if createdAt.IsZero() {
 				createdAt = time.Now().UTC()
 			}
-			sessions = append(sessions, SessionInfo{ID: meta.SessionID, CreatedAt: createdAt})
+			title := meta.SessionID
+			if meta.Summary != "" {
+				lines := strings.Split(meta.Summary, "\n")
+				title = strings.TrimSpace(lines[0])
+				if len(title) > 60 {
+					title = title[:57] + "..."
+				}
+			}
+			sessions = append(sessions, SessionInfo{
+				ID:        meta.SessionID,
+				Title:     title,
+				Summary:   meta.Summary,
+				CreatedAt: createdAt,
+				UpdatedAt: createdAt,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"sessions": sessions})
@@ -3466,7 +3527,9 @@ func (s *APIServer) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		}
 		sessions = append(sessions, SessionInfo{
 			ID:        entry.Name(),
+			Title:     entry.Name(),
 			CreatedAt: info.ModTime(),
+			UpdatedAt: info.ModTime(),
 		})
 	}
 

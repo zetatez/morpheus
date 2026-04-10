@@ -2,11 +2,15 @@ package registry
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/zetatez/morpheus/pkg/sdk"
 )
+
+type CheckFn func() bool
 
 type ToolMetadata struct {
 	Category      string
@@ -18,6 +22,9 @@ type ToolMetadata struct {
 	RegisteredAt  time.Time
 	LastUsedAt    time.Time
 	UseCount      int64
+
+	CheckFn     CheckFn
+	RequiresEnv []string
 }
 
 type ToolEntry struct {
@@ -51,6 +58,10 @@ func (r *Registry) RegisterWithMetadata(tool sdk.Tool, metadata ToolMetadata) er
 		return fmt.Errorf("tool name required")
 	}
 
+	if err := r.validateEnvRequirements(metadata.RequiresEnv); err != nil {
+		return fmt.Errorf("tool %s: %w", name, err)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -64,6 +75,93 @@ func (r *Registry) RegisterWithMetadata(tool sdk.Tool, metadata ToolMetadata) er
 	}
 
 	return nil
+}
+
+func (r *Registry) validateEnvRequirements(envs []string) error {
+	for _, env := range envs {
+		if strings.TrimSpace(env) == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(env); !exists {
+			return fmt.Errorf("required environment variable %s is not set", env)
+		}
+	}
+	return nil
+}
+
+func (r *Registry) IsToolAvailable(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.tools[name]
+	if !ok {
+		return false
+	}
+
+	if entry.Metadata.CheckFn != nil && !entry.Metadata.CheckFn() {
+		return false
+	}
+
+	for _, env := range entry.Metadata.RequiresEnv {
+		if strings.TrimSpace(env) != "" {
+			if _, exists := os.LookupEnv(env); !exists {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (r *Registry) GetUnavailableReason(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	entry, ok := r.tools[name]
+	if !ok {
+		return "tool not found"
+	}
+
+	if entry.Metadata.CheckFn != nil && !entry.Metadata.CheckFn() {
+		return "tool runtime check failed"
+	}
+
+	for _, env := range entry.Metadata.RequiresEnv {
+		if strings.TrimSpace(env) != "" {
+			if _, exists := os.LookupEnv(env); !exists {
+				return fmt.Sprintf("required environment variable %s is not set", env)
+			}
+		}
+	}
+
+	return ""
+}
+
+func (r *Registry) ListAvailable() []sdk.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var tools []sdk.Tool
+	for _, entry := range r.tools {
+		if !entry.Metadata.Deprecated && r.isAvailableUnlocked(entry) {
+			tools = append(tools, entry.Tool)
+		}
+	}
+	return tools
+}
+
+func (r *Registry) isAvailableUnlocked(entry ToolEntry) bool {
+	if entry.Metadata.CheckFn != nil && !entry.Metadata.CheckFn() {
+		return false
+	}
+	for _, env := range entry.Metadata.RequiresEnv {
+		if strings.TrimSpace(env) != "" {
+			if _, exists := os.LookupEnv(env); !exists {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r *Registry) RegisterDeprecated(tool sdk.Tool, category, deprecatedMsg string) error {

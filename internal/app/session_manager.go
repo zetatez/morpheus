@@ -510,6 +510,8 @@ func (sm *SessionManager) SetPendingConfirmation(sessionID string, pc *PendingCo
 
 func generateID(length int) string {
 	bytes := make([]byte, length/2)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return hex.EncodeToString(bytes)
 }

@@ -310,11 +310,6 @@ func EstimateTokens(text string) int {
 // Layer 2: Context folding     - Fold related messages before compression triggers
 // Layer 3: Auto-compaction    - LLM summary when token count approaches window - 20K
 // Layer 4: Memory persistence - Preserve critical constraints across compression boundaries
-//
-// Layer 1: Micro-compaction    - Tool output in-place reduction, keep task-relevant parts
-// Layer 2: Context folding     - Fold related messages before compression triggers
-// Layer 3: Auto-compaction    - LLM summary when token count approaches window - 20K
-// Layer 4: Memory persistence - Preserve critical constraints across compression boundaries
 
 const (
 	// Layer 3 thresholds

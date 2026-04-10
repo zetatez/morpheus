@@ -20,18 +20,21 @@ const (
 	LoopStatusStop              LoopStatus = "stop"
 	LoopStatusCompact           LoopStatus = "compact"
 	LoopStatusNeedsFinalSummary LoopStatus = "needs_final_summary"
+	LoopStatusNeedsConfirmation LoopStatus = "needs_confirmation"
 )
 
 type LoopResult struct {
-	Status   LoopStatus
-	Response *sdk.Plan
-	Error    error
+	Status       LoopStatus
+	Response     *sdk.Plan
+	Error        error
+	Confirmation *PendingConfirmation
 }
 
-func (r LoopResult) IsContinue() bool { return r.Status == LoopStatusContinue }
-func (r LoopResult) IsStop() bool     { return r.Status == LoopStatusStop }
-func (r LoopResult) IsCompact() bool  { return r.Status == LoopStatusCompact }
-func (r LoopResult) HasError() bool   { return r.Error != nil }
+func (r LoopResult) IsContinue() bool          { return r.Status == LoopStatusContinue }
+func (r LoopResult) IsStop() bool              { return r.Status == LoopStatusStop }
+func (r LoopResult) IsCompact() bool           { return r.Status == LoopStatusCompact }
+func (r LoopResult) IsNeedsConfirmation() bool { return r.Status == LoopStatusNeedsConfirmation }
+func (r LoopResult) HasError() bool            { return r.Error != nil }
 
 type ProcessorEventType string
 

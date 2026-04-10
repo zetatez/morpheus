@@ -18,16 +18,6 @@ import (
 	fstool "github.com/zetatez/morpheus/internal/tools/fs"
 )
 
-// isSafeFileSearchQuery validates that the query contains only safe characters for find command
-func isSafeFileSearchQuery(query string) bool {
-	if query == "" {
-		return false
-	}
-	// Allow only alphanumeric, spaces, dots, underscores, hyphens, and common filename chars
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._\- ]+$`, query)
-	return matched
-}
-
 func (s *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

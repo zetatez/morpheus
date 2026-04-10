@@ -55,6 +55,7 @@ export type ReplRequest = {
   input: string
   mode?: string
   attachments?: AttachmentInput[]
+  isolated?: boolean
 }
 
 export type PlanRequest = {
@@ -78,7 +79,10 @@ export type AttachmentInput = {
 
 export type SessionInfo = {
   id: string
+  title?: string
+  summary?: string
   created_at: string
+  updated_at?: string
 }
 
 export type SessionDump = {
@@ -120,8 +124,6 @@ export type MetricsResponse = {
   active_requests: number
   processed_requests: number
   error_requests: number
-  input_tokens: number
-  output_tokens: number
   latency_ms?: { p50: number; p95: number; p99: number }
   memory?: {
     heap_alloc_mb?: number
@@ -296,6 +298,9 @@ export type StreamEvent =
   | { event: "team_task_started"; data: TeamTaskEvent }
   | { event: "team_task_finished"; data: TeamTaskEvent }
   | { event: "team_task_error"; data: TeamTaskEvent }
+  | { event: "reasoning_start"; data: { id: string } }
+  | { event: "reasoning_delta"; data: { id: string; text: string } }
+  | { event: "reasoning_end"; data: { text: string } }
 
 export async function streamRunEvents(
   baseUrl: string,

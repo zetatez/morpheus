@@ -25,7 +25,6 @@ import {
   type ApiResponse,
   type ConfirmationPayload,
   type StreamEvent,
-  type TeamTaskEvent,
   type TodoItem,
   type ToolResult,
   type PlanStep,
@@ -88,6 +87,22 @@ type ModalItem = {
   hasToken?: boolean
 }
 
+const formatRelativeTime = (dateStr: string): string => {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffSecs = Math.floor(diffMs / 1000)
+  const diffMins = Math.floor(diffSecs / 60)
+  const diffHours = Math.floor(diffMins / 60)
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffSecs < 60) return "just now"
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  if (diffDays === 1) return "yesterday"
+  if (diffDays < 7) return `${diffDays}d ago`
+  return date.toLocaleDateString()
+}
+
 const parseAttachmentPaths = (text: string): AttachmentInput[] => {
   const paths: AttachmentInput[] = []
   const lines = text.split("\n")
@@ -105,6 +120,17 @@ const parseAttachmentPaths = (text: string): AttachmentInput[] => {
   }
   
   return paths
+}
+
+function StatusBar(props: { agentModeColor: string; agentModeIcon: string; agentModeLabel: string; model?: string; activeRunBanner?: string; notification?: string; busy: () => boolean }) {
+  return (
+    <box flexDirection="row" paddingRight={2} paddingBottom={1}>
+      <text fg={props.agentModeColor}>{props.agentModeIcon} {props.agentModeLabel}</text>
+      <text fg={theme.muted}> · {props.model}{props.busy() ? " · Running" : ""}{props.activeRunBanner ? ` · ${props.activeRunBanner}` : ""}</text>
+      <box flexGrow={1} />
+      <text fg={theme.success}>{props.notification}</text>
+    </box>
+  )
 }
 
 function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string; debugStream?: boolean }) {
@@ -148,15 +174,10 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
   const [attachments, setAttachments] = createSignal<AttachmentInput[]>([])
   const [escapePressed, setEscapePressed] = createSignal(false)
   const [isTyping, setIsTyping] = createSignal(false)
-  const [serverMetrics, setServerMetrics] = createSignal<MetricsResponse | null>(null)
   const [currentModel, setCurrentModel] = createSignal<string>("")
   const [todoPulse, setTodoPulse] = createSignal(false)
-  const [activeTeamTasks, setActiveTeamTasks] = createSignal<TeamTaskEvent[]>([])
-  const [teamTaskPulse, setTeamTaskPulse] = createSignal(false)
   let monitorInterval: ReturnType<typeof setInterval> | undefined
-  let metricsInterval: ReturnType<typeof setInterval> | undefined
   let todoPulseInterval: ReturnType<typeof setInterval> | undefined
-  let teamTaskPulseInterval: ReturnType<typeof setInterval> | undefined
   let abortController: AbortController | undefined
   let escapeTimeoutRef: ReturnType<typeof setTimeout> | undefined
   let inputQueue: { text: string; entryId: string }[] = []
@@ -186,7 +207,7 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
 
   const finishCurrentAndMaybeRunNext = () => {
     setBusy(false)
-    processNextQueuedRequest()
+    queueMicrotask(() => processNextQueuedRequest())
   }
 
   const syncQueuedConversationEntry = () => {
@@ -335,12 +356,18 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
   const updateEntryContent = (id: string, content: string) => {
     debugLog("updateEntryContent", { id, preview: content.slice(0, 240) })
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, content } : e)))
-    queueMicrotask(() => renderer.requestRender())
+    queueMicrotask(() => {
+      if (scrollRef && !isTyping()) scrollRef.scrollBy(100000)
+      renderer.requestRender()
+    })
   }
 
   const updateEntry = (id: string, updater: (entry: Entry) => Entry) => {
     setEntries((prev) => prev.map((e) => (e.id === id ? updater(e) : e)))
-    queueMicrotask(() => renderer.requestRender())
+    queueMicrotask(() => {
+      if (scrollRef && !isTyping()) scrollRef.scrollBy(100000)
+      renderer.requestRender()
+    })
   }
 
   const formatTodoBlock = (todos: TodoItem[]) => {
@@ -398,33 +425,26 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
 
     const pending = pendingConfirmation()
     if (pending) {
-      const normalized = trimmed.toLowerCase()
-      const isApproval = ["yes", "y", "approve", "approved", "allow", "ok", "confirm", "proceed", "continue"].includes(normalized)
-      const isDenial = ["no", "n", "deny", "denied", "cancel", "stop"].includes(normalized)
-      if (isApproval || isDenial) {
-        appendEntry({ id: crypto.randomUUID(), role: "user", content: trimmed })
-        setPendingConfirmation(null)
-        const decision = isApproval ? "approve" : "deny"
-        appendEntry({ id: crypto.randomUUID(), role: "assistant", content: isApproval ? "Approved. Executing..." : "Denied. Cancelled." })
-        setBusy(true)
-        try {
-          const response = await client().repl({ session: sessionID(), input: decision, mode: agentMode() })
-          if (response.reply) {
-            appendEntry({ id: crypto.randomUUID(), role: "assistant", content: response.reply })
-          }
-          if (response.confirmation) {
-            openConfirmModal(response.confirmation)
-          }
-        } catch (err) {
-          appendEntry({
-            id: crypto.randomUUID(),
-            role: "error",
-            content: err instanceof Error ? err.message : String(err),
-          })
+      appendEntry({ id: crypto.randomUUID(), role: "user", content: trimmed })
+      setPendingConfirmation(null)
+      setBusy(true)
+      try {
+        const response = await client().repl({ session: sessionID(), input: trimmed, mode: agentMode() })
+        if (response.reply) {
+          appendEntry({ id: crypto.randomUUID(), role: "assistant", content: response.reply })
         }
-        finishCurrentAndMaybeRunNext()
-        return
+        if (response.confirmation) {
+          openConfirmModal(response.confirmation)
+        }
+      } catch (err) {
+        appendEntry({
+          id: crypto.randomUUID(),
+          role: "error",
+          content: err instanceof Error ? err.message : String(err),
+        })
       }
+      finishCurrentAndMaybeRunNext()
+      return
     }
 
     if (!modal()) {
@@ -475,7 +495,6 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
     }
 
     if (busy() && trimmed !== "approve" && trimmed !== "deny") {
-      abortController?.abort()
       const entryId = crypto.randomUUID()
       inputQueue.push({ text: trimmed, entryId })
       setQueuedRequests((prev) => [...prev, { id: entryId, text: trimmed }])
@@ -559,10 +578,6 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
         lastLoopEvent = eventKey
         return
       }
-      if (text.includes("working through step") || text.includes("I know the next concrete action") || text.includes("tool finished") || text.includes("I have enough information to produce the answer")) {
-        lastLoopEvent = eventKey
-        return
-      }
       appendEntry({ id: crypto.randomUUID(), role: "assistant", content: decorateThinkingText(text), kind: "thinking" })
       lastLoopEvent = eventKey
     }
@@ -579,16 +594,14 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
     }
 
     const normalizeThinkingText = (text: string) => {
-      const trimmed = text.trimStart()
-      if (!trimmed) return text
-      if (trimmed.toLowerCase().startsWith("thinking:")) return text
-      return `Thinking: ${text}`
+      const firstLine = text.split("\n")[0].trim()
+      if (!firstLine) return text
+      if (firstLine.toLowerCase().startsWith("thinking:")) return firstLine
+      return `Thinking: ${firstLine}`
     }
 
     const decorateThinkingText = (text: string) => {
-      const normalized = normalizeThinkingText(text)
-      if (normalized.startsWith("Thinking:\n")) return normalized
-      return normalized.replace(/^Thinking:\s*/, "Thinking:\n")
+      return normalizeThinkingText(text)
     }
 
     const phaseNoteForTool = (tool: string) => {
@@ -738,19 +751,24 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
           appendLoopNote(`phase:${evt.data.tool}`, phase)
           lastPhaseNote = phase
         }
-        appendEntry({ id: entryID, role: "tool", content: formatToolOutput(step, null) })
+        const toolOutput = formatToolOutput(step, null)
+        if (toolOutput.trim()) {
+          appendEntry({ id: entryID, role: "tool", content: toolOutput })
+        }
         return
       }
       if (evt.event === "tool_result") {
         const callID = evt.data.call_id
         const existing = callID ? toolEntryByCallID.get(callID) : undefined
+        const toolOutput = formatToolOutput(evt.data.step, evt.data.result)
+        if (!toolOutput.trim()) return
         if (existing) {
-          updateEntryContent(existing, formatToolOutput(evt.data.step, evt.data.result))
+          updateEntryContent(existing, toolOutput)
         } else {
           appendEntry({
             id: crypto.randomUUID(),
             role: "tool",
-            content: formatToolOutput(evt.data.step, evt.data.result),
+            content: toolOutput,
           })
         }
         return
@@ -759,28 +777,17 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
         appendEntry({ id: crypto.randomUUID(), role: "error", content: evt.data.error })
         return
       }
-      if (evt.event === "team_plan") {
-        const tasks = evt.data.tasks as TeamTaskEvent[]
-        if (tasks && tasks.length > 0) {
-          setActiveTeamTasks(tasks)
-          setTeamTaskPulse(true)
-        }
+      if (evt.event === "reasoning_start") {
         return
       }
-      if (evt.event === "team_task_started" || evt.event === "team_task_finished" || evt.event === "team_task_error") {
-        const task = evt.data as TeamTaskEvent
-        setActiveTeamTasks(prev => {
-          const existing = prev.findIndex(t => t.id === task.id)
-          if (existing >= 0) {
-            const updated = [...prev]
-            updated[existing] = task
-            return updated
-          }
-          return [...prev, task]
-        })
-        if (evt.event === "team_task_finished" || evt.event === "team_task_error") {
-          setActiveRunBanner(evt.event === "team_task_error" ? `Task ${task.id} failed` : `Task ${task.id} completed`)
-        }
+      if (evt.event === "reasoning_delta") {
+        if (!isCurrentStream()) return
+        const text = evt.data.text
+        if (!text) return
+        appendEntry({ id: crypto.randomUUID(), role: "assistant", content: decorateThinkingText(text), kind: "thinking" })
+        return
+      }
+      if (evt.event === "reasoning_end") {
         return
       }
       if (evt.event === "done") {
@@ -815,6 +822,7 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
         appendFinalSummary(formatFailureSummary(finalErrorText))
       }
       finishCurrentAndMaybeRunNext()
+      return
     } catch (err) {
       if (err instanceof Error && (err.name === "AbortError" || err.message?.includes("aborted"))) {
         if (currentRunID) {
@@ -1346,7 +1354,7 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
           id: crypto.randomUUID(),
           role: "assistant",
           content:
-            "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /plan <prompt>\n  /team\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
+            "Commands:\n  /new\n  /sessions\n  /skills\n  /models\n  /monitor\n  /plan <prompt>\n  /vim <path>\n  /ssh\n  /connect <url>\n  /help\n  /exit\n\nOther /<skill> commands will run the matching skill if available.\n\nKeys:\n  Tab toggle mode",
         })
         return true
       case "/ssh": {
@@ -1481,12 +1489,13 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
           }
           const items = sessions
             .slice()
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            .sort((a, b) => new Date(b.updated_at ?? b.created_at).getTime() - new Date(a.updated_at ?? a.created_at).getTime())
             .slice(0, 32)
             .map((s: SessionInfo) => ({
               id: s.id,
-              title: s.id,
-              subtitle: s.created_at,
+              title: s.title ?? s.id,
+              subtitle: s.summary,
+              meta: formatRelativeTime(s.updated_at ?? s.created_at),
             }))
           startModal("sessions", "Sessions", "Type to search, Enter to select", items)
           const currentIndex = items.findIndex((item) => item.id === sessionID())
@@ -1509,10 +1518,11 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
             appendEntry({ id: crypto.randomUUID(), role: "assistant", content: "No skills found." })
             return true
           }
+          const maxWidth = Math.max(0, ...res.skills.map((s) => s.name.length))
           const items = res.skills.map((s: SkillMetadata) => ({
             id: s.name,
-            title: s.name,
-            subtitle: s.description,
+            title: s.name.padEnd(maxWidth),
+            subtitle: s.description?.replace(/\s+/g, " ").trim(),
           }))
           startModal("skills", "Skills", "Type to search, Enter to select", items)
           setModalInput("")
@@ -1581,6 +1591,16 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
   }
 
   useKeyboard((evt) => {
+    if (!modal() && textareaRef?.focused) {
+      if (evt.name === "arrowup") {
+        historyPrev()
+        return
+      }
+      if (evt.name === "arrowdown") {
+        historyNext()
+        return
+      }
+    }
     if (modal()) {
       if (modal() === "runs") {
         if (evt.name === "d") {
@@ -1756,17 +1776,8 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
       submit(props.initialPrompt)
     }
 
-    metricsInterval = setInterval(async () => {
-      try {
-        const metrics = await client().metrics()
-        setServerMetrics(metrics)
-      } catch {
-      }
-    }, 3000)
     const initMetrics = async () => {
       try {
-        const metrics = await client().metrics()
-        setServerMetrics(metrics)
         const models = await client().models()
         if (models.current) {
           setCurrentModel(models.current.model)
@@ -1775,13 +1786,10 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
       }
     }
     initMetrics()
-    todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700)
-    teamTaskPulseInterval = setInterval(() => setTeamTaskPulse((value) => !value), 700)
+    const todoPulseInterval = setInterval(() => setTodoPulse((value) => !value), 700)
 
     onCleanup(() => {
-      if (metricsInterval) clearInterval(metricsInterval)
       if (todoPulseInterval) clearInterval(todoPulseInterval)
-      if (teamTaskPulseInterval) clearInterval(teamTaskPulseInterval)
     })
   })
 
@@ -1792,14 +1800,17 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
 
   const width = createMemo(() => terminal().width)
   const height = createMemo(() => terminal().height)
-  const contentHeight = createMemo(() => Math.max(5, height() - 6))
+  const contentHeight = createMemo(() => Math.max(5, height() - 7))
   const todoPanelWidth = createMemo(() => activeTodos().length > 0 ? Math.min(42, Math.max(28, Math.floor(width() * 0.28))) : 0)
-  const teamTaskPanelWidth = createMemo(() => activeTeamTasks().length > 0 ? Math.min(48, Math.max(32, Math.floor(width() * 0.32))) : 0)
-  const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth() - teamTaskPanelWidth()))
+  const mainPanelWidth = createMemo(() => Math.max(20, width() - todoPanelWidth()))
 
   return (
     <box flexDirection="column" width={width()} height={height()} backgroundColor={theme.background}>
-      <StatusBar apiUrl={apiUrl()} sessionID={sessionID()} serverMetrics={serverMetrics()} agentMode={agentMode()} model={currentModel()} />
+      <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
+        <text fg={theme.muted}>{apiUrl()}</text>
+        <box flexGrow={1} />
+        <text fg={theme.muted}>session {sessionID()}</text>
+      </box>
       <box flexDirection="row" height={contentHeight()}>
         <ChatEntries 
           entries={entries()} 
@@ -1811,9 +1822,6 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
         />
         <Show when={activeTodos().length > 0}>
           <TodoList todos={activeTodos()} todoPulse={todoPulse()} panelWidth={todoPanelWidth()} contentHeight={contentHeight()} />
-        </Show>
-        <Show when={activeTeamTasks().length > 0}>
-          <TeamTaskPanel tasks={activeTeamTasks()} taskPulse={teamTaskPulse()} panelWidth={teamTaskPanelWidth()} contentHeight={contentHeight()} />
         </Show>
       </box>
       <Show when={modal()}>
@@ -1835,22 +1843,18 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
           height={height()} 
         />
       </Show>
-      <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-        <box flexDirection="row" paddingBottom={2}>
-          <text fg={agentModeColor()}>{agentModeIcon()} {agentModeLabel()}</text>
-          <Show when={currentModel()}>
-            <text fg={theme.muted}> · {currentModel()}</text>
-          </Show>
-          <Show when={activeRunBanner()}>
-            <text fg={theme.muted}> · {activeRunBanner()}</text>
-          </Show>
-          <box flexGrow={1} />
-          <Show when={notification()}>
-            <text fg={theme.success}>{notification()}</text>
-          </Show>
-        </box>
+      <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={2}>
+        <StatusBar 
+          agentModeColor={agentModeColor()} 
+          agentModeIcon={agentModeIcon()} 
+          agentModeLabel={agentModeLabel()} 
+          model={currentModel()} 
+          activeRunBanner={activeRunBanner()} 
+          notification={notification()}
+          busy={busy}
+        />
         <Show when={attachments().length > 0}>
-          <box flexDirection="row" paddingBottom={1} flexWrap="wrap">
+          <box flexDirection="row" paddingTop={1} paddingBottom={1} flexWrap="wrap">
             <For each={attachments()}>{(att: AttachmentInput) => {
               const icon = att.kind === "image" ? "🖼️ " : att.kind === "audio" ? "🎵 " : att.kind === "video" ? "🎬 " : "📎 "
               const name = att.name || (att.path ? att.path.split("/").pop() : "file")
@@ -1863,6 +1867,7 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
             }}</For>
           </box>
         </Show>
+        <box paddingTop={1}/>
         <textarea
           ref={(val: any) => { textareaRef = val }}
           height={3}
@@ -1888,6 +1893,9 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
             { name: "kpenter", shift: true, action: "newline" },
             { name: "linefeed", action: "submit" },
             { name: "linefeed", shift: true, action: "newline" },
+            { name: "arrowup", action: historyPrev },
+            { name: "arrowdown", action: historyNext },
+            { name: "ctrl+c", action: "cancel" },
           ]}
           onSubmit={() => {
             setIsTyping(false)
@@ -1908,19 +1916,17 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
 
             const pathMatch = text.match(/^@(.+)$/m)
             if (pathMatch) {
+              evt.preventDefault()
               const filePath = pathMatch[1].trim()
               if (filePath.startsWith("/") || filePath.startsWith("~") || filePath.includes("/") || filePath.includes("\\")) {
-                evt.preventDefault()
                 const expanded = filePath.replace(/^~/, process.env.HOME || "")
                 const current = attachments()
                 setAttachments([...current, { path: expanded }])
-                return
               } else {
-                evt.preventDefault()
                 const current = attachments()
                 setAttachments([...current, { path: filePath }])
-                return
               }
+              return
             }
           }}
           placeholder={escapePressed()
@@ -1932,23 +1938,6 @@ function App(props: { apiUrl: string; sessionID: string; initialPrompt?: string;
                 : "Ask anything..."}
         />
       </box>
-    </box>
-  )
-}
-
-function StatusBar(props: { apiUrl: string; sessionID: string; serverMetrics: { input_tokens?: number; output_tokens?: number } | null; agentMode: "build" | "plan"; model?: string }) {
-  return (
-    <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1}>
-      <box flexDirection="row">
-        <text fg={theme.muted}>{props.apiUrl}</text>
-        {props.model ? <text fg={theme.muted}> · {props.model}</text> : null}
-      </box>
-      <box flexGrow={1} />
-      <text fg={theme.muted}>session {props.sessionID}</text>
-      <box paddingLeft={3} />
-      <text fg={theme.muted}>↑{formatToken(props.serverMetrics?.input_tokens ?? 0)}</text>
-      <box paddingLeft={1} />
-      <text fg={theme.muted}>↓{formatToken(props.serverMetrics?.output_tokens ?? 0)}</text>
     </box>
   )
 }
@@ -2001,12 +1990,17 @@ function ChatEntries(props: { entries: Entry[]; isToolExpanded: (id: string) => 
           <Show when={(entry.role === "tool" || entry.role === "error") && entry.title}>
             <text fg={entry.role === "error" ? theme.error : theme.tool} attributes={TextAttributes.BOLD}>{entry.role === "tool" ? entry.title ?? "Tool" : "Error"}</text>
           </Show>
-          <Show when={entry.role === "assistant"}>
+          <Show when={entry.role === "assistant" && (entry as any).kind === "thinking"}>
+            <box flexDirection="column" border={["left"]} borderColor={theme.muted} paddingLeft={2}>
+              <text fg={theme.thinking} attributes={TextAttributes.ITALIC}>{entry.content}</text>
+            </box>
+          </Show>
+          <Show when={entry.role === "assistant" && (entry as any).kind !== "thinking" && (entry as any).kind !== undefined}>
             <box flexDirection="column">
               <For each={renderMarkdownLines(entry.content, { text: theme.text, muted: theme.thinking, code: theme.primary, success: theme.success, output: theme.output, file: theme.file, accent: theme.tool, error: theme.error, thinking: theme.thinking, thinkingLabel: theme.thinkingLabel })}>{(line: { fg?: string; text?: string; attributes?: TextAttribute; spans?: Array<{ text: string; fg?: string; attributes?: TextAttribute }> }) => (
                 <Show when={line.spans} fallback={<text fg={line.fg ?? theme.text} attributes={line.attributes}>{line.text}</text>}>
                   <box flexDirection="row">
-                    <For each={line.spans}>{(span: { text: string; fg?: string; attributes?: TextAttribute }) => (
+                    <For each={line.spans}>{(span) => (
                       <text fg={span.fg ?? theme.text} attributes={span.attributes}>{span.text}</text>
                     )}</For>
                   </box>
@@ -2079,58 +2073,6 @@ function TodoList(props: { todos: TodoItem[]; todoPulse: boolean; panelWidth: nu
               <text fg={todoLineColor(todo, props.todoPulse)} attributes={todo.active ? TextAttributes.BOLD : TextAttributes.NONE}>{statusIcon()} {todo.content}{todo.tool ? ` (${todo.tool})` : ""}</text>
               <Show when={note()}>
                 <text fg={todo.status === "failed" ? theme.todoFailed : theme.muted}>{note()}</text>
-              </Show>
-            </box>
-          )
-        }}</For>
-      </box>
-    </Show>
-  )
-}
-
-function TeamTaskPanel(props: { tasks: TeamTaskEvent[]; taskPulse: boolean; panelWidth: number; contentHeight: number }) {
-  const taskStatusColor = (status: string, pulse: boolean) => {
-    if (status === "completed") return theme.todoDone
-    if (status === "failed") return theme.todoFailed
-    if (status === "cancelled") return theme.todoCancelled
-    if (status === "running") return pulse ? theme.primary : theme.todoActive
-    return theme.todoPending
-  }
-
-  const truncate = (str: string, maxLen: number) => {
-    if (str.length <= maxLen) return str
-    return str.slice(0, maxLen - 3) + "..."
-  }
-
-  return (
-    <Show when={props.tasks.length > 0}>
-      <box
-        width={props.panelWidth}
-        height={props.contentHeight}
-        flexDirection="column"
-        paddingLeft={1}
-        paddingRight={2}
-        paddingTop={1}
-        backgroundColor={theme.todoPanel}
-      >
-        <text fg={theme.primary} attributes={TextAttributes.BOLD}># Team Tasks</text>
-        <box paddingBottom={1} />
-        <For each={props.tasks}>{(task: TeamTaskEvent) => {
-          const statusIcon = () => {
-            if (task.status === "completed") return "[x]"
-            if (task.status === "running") return props.taskPulse ? "[•]" : "[>]"
-            if (task.status === "failed") return "[!]"
-            if (task.status === "cancelled") return "[-]"
-            return "[ ]"
-          }
-          return (
-            <box flexDirection="column" paddingBottom={1}>
-              <text fg={taskStatusColor(task.status, props.taskPulse)}>{statusIcon()} [{task.role}] {truncate(task.prompt, 40)}</text>
-              <Show when={task.summary}>
-                <text fg={theme.muted}>  → {truncate(task.summary || "", 60)}</text>
-              </Show>
-              <Show when={task.error}>
-                <text fg={theme.todoFailed}>  ! {truncate(task.error || "", 60)}</text>
               </Show>
             </box>
           )
@@ -2272,6 +2214,7 @@ function renderMarkdownLines(content: string, colors: Record<string, string | un
   let codeLang = ""
   let codeBuffer: string[] = []
   let inThinking = false
+  let tableBuffer: string[][] = []
 
   const flushCode = () => {
     if (codeBuffer.length > 0) {
@@ -2286,11 +2229,54 @@ function renderMarkdownLines(content: string, colors: Record<string, string | un
     }
   }
 
+  const strWidth = (s: string): number => {
+      let w = 0
+      const chars = [...s]
+      for (let i = 0; i < chars.length; i++) {
+        const code = chars[i].codePointAt(0) ?? 0
+        if (code === 0xFE0F || code === 0xFE0E) continue
+        if ((code >= 0x1F300 && code <= 0x1F9FF) ||
+            (code >= 0x2600 && code <= 0x26FF) ||
+            (code >= 0x2700 && code <= 0x27BF) ||
+            (code >= 0x1F3FB && code <= 0x1F3FF)) {
+          w += 2
+        } else if ((code >= 0x00B0 && code <= 0x00B9) ||
+                   (code >= 0x2070 && code <= 0x2079) ||
+                   (code >= 0x2080 && code <= 0x2089)) {
+          w += 1
+        } else if (code > 0x7F) {
+          w += 2
+        } else {
+          w += 1
+        }
+      }
+      return w
+    }
+
+    const flushTable = () => {
+    if (tableBuffer.length === 0) return
+    const colWidths = tableBuffer[0].map((_, colIdx) => Math.max(...tableBuffer.map(row => strWidth(row[colIdx] ?? ""))))
+    const sep = colWidths.map(w => "-".repeat(w)).join("|")
+    for (let i = 0; i < tableBuffer.length; i++) {
+      const row = tableBuffer[i]
+      const aligned = row.map((cell, j) => {
+        const w = strWidth(cell)
+        return cell + " ".repeat(Math.max(0, colWidths[j] - w))
+      }).join("|")
+      out.push({ text: "|" + aligned + "|", fg: colors.muted || "#5c6370" })
+      if (i === 0) {
+        out.push({ text: "|" + sep + "|", fg: colors.muted || "#5c6370" })
+      }
+    }
+    tableBuffer = []
+  }
+
   for (const raw of lines) {
     const line = raw ?? ""
     const trimmed = line.trim()
 
     if (trimmed.startsWith("```")) {
+      flushTable()
       if (inCode) {
         flushCode()
         inCode = false
@@ -2309,6 +2295,7 @@ function renderMarkdownLines(content: string, colors: Record<string, string | un
     }
 
     if (trimmed.startsWith("Thinking:") || trimmed.toLowerCase().startsWith("thinking:")) {
+      flushTable()
       const rest = trimmed.replace(/^thinking:\s*/i, "").trimStart()
       out.push({ text: "⟫ Thinking: ", fg: colors.thinkingLabel ?? colors.accent, attributes: TextAttributes.BOLD })
       if (rest) {
@@ -2319,12 +2306,25 @@ function renderMarkdownLines(content: string, colors: Record<string, string | un
     }
 
     if (trimmed === "") {
+      flushTable()
       out.push({ text: " " })
       inThinking = false
       continue
     }
 
-    if (/^---+$/.test(trimmed)) continue
+    if (/^\|.*\|$/.test(trimmed) && trimmed.includes("-")) {
+      continue
+    }
+
+    if (/^\|.*\|$/.test(trimmed)) {
+      const cells = trimmed.split("|").filter((_, i, arr) => i > 0 && i < arr.length - 1).map(c => c.trim())
+      if (cells.length > 0 && !inCode) {
+        tableBuffer.push(cells)
+        continue
+      }
+    }
+
+    flushTable()
 
     if (trimmed.startsWith("# ")) {
       out.push({ text: trimmed.slice(2), fg: "#ffa657", attributes: TextAttributes.BOLD })
@@ -2339,6 +2339,8 @@ function renderMarkdownLines(content: string, colors: Record<string, string | un
     out.push({ text: line, fg: colors.text })
   }
 
+  flushTable()
+  flushCode()
   return out
 }
 

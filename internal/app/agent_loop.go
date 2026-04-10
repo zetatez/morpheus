@@ -74,6 +74,8 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 		sessionID = "default"
 	}
 
+	rt.syncMemoryToSession(sessionID)
+
 	run := rt.startRun(sessionID, input, format, mode)
 	defer func() {
 		if run.Cancel != nil {
@@ -98,6 +100,36 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 		finishRun(run, RunStatusFailed, "", err)
 		rt.finalizeRun(run, emit, "run_failed", map[string]interface{}{"error": err.Error()})
 		return Response{}, err
+	}
+
+	if pending, exists := rt.getPendingConfirmation(sessionID); exists {
+		decision, reason := ClassifyConfirmationIntent(ctx, rt.logger, &rt.cfg.Planner, normalized.Text, pending.Tool, pending.Decision.Reason)
+		rt.logger.Info("confirmation intent classification", zap.String("decision", fmt.Sprintf("%v", decision)), zap.String("reason", reason))
+		if decision == IntentApprove {
+			rt.clearPendingConfirmation(sessionID)
+			if len(pending.Patterns) > 0 {
+				for _, pattern := range pending.Patterns {
+					rt.approvePermission(sessionID, pending.Tool, pattern)
+				}
+			}
+			reply := "Permission approved. Resuming..."
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+			finishRun(run, RunStatusCompleted, reply, nil)
+			rt.finalizeRun(run, emit, "run_completed", map[string]interface{}{"reply": reply})
+			return Response{Reply: reply}, nil
+		}
+		if decision == IntentDeny {
+			rt.clearPendingConfirmation(sessionID)
+			reply := "Permission denied. Cancelled."
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", reply, nil)
+			finishRun(run, RunStatusCompleted, reply, nil)
+			rt.finalizeRun(run, emit, "run_completed", map[string]interface{}{"reply": reply})
+			return Response{Reply: reply}, nil
+		}
+		if decision == IntentUnclear {
+			rt.clearPendingConfirmation(sessionID)
+			rt.logger.Info("confirmation intent unclear, treating as regular input")
+		}
 	}
 
 	rt.checkAndCompress(ctx, sessionID)
@@ -140,7 +172,7 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 
 	if streaming {
 		callbacks.OnCallChat = func(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}, toolChoice interface{}, emitFn func(string, interface{}) error) (ChatResponse, error) {
-			resp, err := rt.callChatWithToolsStream(ctx, messages, tools, toolChoice, emitFn)
+			resp, err := rt.callChatWithToolsStreamWithRetry(ctx, messages, tools, toolChoice, emitFn)
 			if err != nil {
 				return ChatResponse{}, err
 			}
@@ -164,7 +196,7 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 		}
 	} else {
 		callbacks.OnCallChat = func(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}, toolChoice interface{}, emitFn func(string, interface{}) error) (ChatResponse, error) {
-			resp, err := rt.callChatWithTools(ctx, messages, tools, toolChoice, emitFn)
+			resp, err := rt.callChatWithToolsWithRetry(ctx, messages, tools, toolChoice, emitFn)
 			if err != nil {
 				return ChatResponse{}, err
 			}
@@ -192,6 +224,9 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 	loop.SetLogger(rt.logger)
 
 	forkIsolated := forkIsolationFromContext(ctx)
+	if input.Isolated {
+		forkIsolated = true
+	}
 	baseMessages := rt.buildMessagesForRoute(ctx, sessionID, routeToolAgent, forkIsolated)
 	if normalized.Text != "" || len(normalized.Parts) > 0 {
 		baseMessages = append(baseMessages, map[string]interface{}{"role": "user", "content": normalized.Text})
@@ -247,6 +282,21 @@ func (rt *Runtime) agentLoopV2WithStreaming(ctx context.Context, sessionID strin
 		finishRun(run, RunStatusCompleted, reply, nil)
 		rt.finalizeRun(run, emit, "run_completed", map[string]interface{}{"reply": reply})
 		return Response{Plan: finalPlan, Reply: reply}, nil
+	case LoopStatusNeedsConfirmation:
+		if result.Confirmation != nil {
+			rt.setPendingConfirmation(sessionID, *result.Confirmation)
+			question := formatConfirmationPrompt(*result.Confirmation)
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", question, nil)
+			payload := confirmationPayload(*result.Confirmation)
+			run.Status = RunStatusWaitingUser
+			run.Confirmation = payload
+			run.UpdatedAt = time.Now()
+			if emit != nil {
+				_ = emit("confirmation", payload)
+			}
+			return Response{Confirmation: payload, Reply: question}, nil
+		}
+		return Response{}, fmt.Errorf("confirmation required but no pending confirmation")
 	default:
 		finishRun(run, RunStatusFailed, "unknown status", fmt.Errorf("unknown loop status"))
 		rt.finalizeRun(run, emit, "run_failed", map[string]interface{}{"error": "unknown loop status"})
@@ -296,6 +346,10 @@ func (rt *Runtime) AgentLoopBackgroundV2(ctx context.Context, run *RunState, ses
 		OnRunEvent: func(eventType string, data map[string]interface{}) {
 			rt.emitRunEvent(run, nil, eventType, data)
 		},
+		OnEmit: func(event string, data interface{}) error {
+			rt.emitRunEvent(run, nil, event, data.(map[string]interface{}))
+			return nil
+		},
 		OnCallChat: func(ctx context.Context, messages []map[string]interface{}, tools []map[string]interface{}, toolChoice interface{}, emitFn func(string, interface{}) error) (ChatResponse, error) {
 			resp, err := rt.callChatWithTools(ctx, messages, tools, toolChoice, nil)
 			if err != nil {
@@ -321,6 +375,9 @@ func (rt *Runtime) AgentLoopBackgroundV2(ctx context.Context, run *RunState, ses
 	loop.SetLogger(rt.logger)
 
 	forkIsolated := forkIsolationFromContext(ctx)
+	if input.Isolated {
+		forkIsolated = true
+	}
 	baseMessages := rt.buildMessagesForRoute(ctx, sessionID, routeToolAgent, forkIsolated)
 	if normalized.Text != "" || len(normalized.Parts) > 0 {
 		baseMessages = append(baseMessages, map[string]interface{}{"role": "user", "content": normalized.Text})
@@ -355,6 +412,25 @@ func (rt *Runtime) AgentLoopBackgroundV2(ctx context.Context, run *RunState, ses
 			plan = *result.Response
 		}
 		return Response{Plan: plan}, nil
+	case LoopStatusNeedsConfirmation:
+		if result.Confirmation != nil {
+			rt.setPendingConfirmation(sessionID, *result.Confirmation)
+			question := formatConfirmationPrompt(*result.Confirmation)
+			_, _ = rt.appendMessage(ctx, sessionID, "assistant", question, nil)
+			payload := confirmationPayload(*result.Confirmation)
+			run.Status = RunStatusWaitingUser
+			run.Confirmation = payload
+			run.UpdatedAt = time.Now()
+			confData := map[string]any{
+				"tool":          payload.Tool,
+				"inputs":        payload.Inputs,
+				"decision":      payload.Decision,
+				"reply_options": payload.ReplyOptions,
+			}
+			rt.emitRunEvent(run, nil, "confirmation", confData)
+			return Response{Confirmation: payload, Reply: question}, nil
+		}
+		return Response{}, fmt.Errorf("confirmation required but no pending confirmation")
 	default:
 		finishRun(run, RunStatusFailed, "unknown status", fmt.Errorf("unknown loop status"))
 		rt.finalizeRun(run, nil, "run_failed", map[string]interface{}{"error": "unknown loop status"})
@@ -490,8 +566,8 @@ const freshInfoSystemPrompt = `You are Morpheus handling a fresh-information req
 
 Rules:
 - The user expects you to proactively fetch the latest information.
-- Use web.fetch before answering unless you already have verified fresh data in the conversation.
-- Do not stop with generic statements like "I cannot access real-time information" if web.fetch is available.
+- Use webfetch before answering unless you already have verified fresh data in the conversation.
+- Do not stop with generic statements like "I cannot access real-time information" if webfetch is available.
 - Prefer a direct public source first. If one source fails, try another public source.
 - For simple factual queries like a single current price, rate, weather value, or headline, stop after you have 1-2 credible successful fetches and answer directly.
 - Do not keep browsing once you already have enough evidence to answer the user's exact question.
@@ -597,12 +673,13 @@ If you must ask:
 - Do not produce long speculative analysis before using tools.
 
 ## Tool Usage
+- **Prefer bash for almost everything**: file operations (ls, find, cat), git (status, log, diff, branch), running tests/builds, JSON parsing (jq), network checks (curl, ping), process management (ps, kill)
 - Use tools whenever they help you verify facts instead of guessing.
 - Batch related work efficiently.
 - Prefer direct file inspection and targeted commands over broad exploratory churn.
-- For complex multi-step work, call ` + "`todo.write`" + ` early to create or refresh the todo list, then update it as execution progresses.
-- Use ` + "`cmd.exec`" + ` confidently for shell-native work such as builds, tests, git inspection, file discovery, JSON formatting, or chaining dependable CLI tools.
-- Prefer ` + "`python - <<'PY' ... PY`" + ` or ` + "`python script.py`" + ` inside ` + "`cmd.exec`" + ` when logic, parsing, or bulk transformation would be clearer in Python than shell.
+- For complex multi-step work, call ` + "`todowrite`" + ` early to create or refresh the todo list, then update it as execution progresses.
+- Use ` + "`bash`" + ` confidently for shell-native work such as builds, tests, git inspection, file discovery, JSON formatting, or chaining dependable CLI tools.
+- Prefer ` + "`python - <<'PY' ... PY`" + ` or ` + "`python script.py`" + ` inside ` + "`bash`" + ` when logic, parsing, or bulk transformation would be clearer in Python than shell.
 - When writing Python for task execution, keep scripts short, deterministic, and focused on one job.
 - Favor commands and scripts that can be rerun safely and that produce inspectable output.
 - If the task is command-heavy, automation-oriented, or needs structured parsing plus execution, consider delegating it to the ` + "`shell-python-operator`" + ` subagent.
@@ -611,7 +688,7 @@ If you must ask:
 - Prefer this rhythm: brief thinking -> tool calls -> concise summary.
 - If the task spans multiple steps, keep the user informed with short progress updates, not long essays.
 - For complex tasks, first decompose the work into a short todo list, keep exactly one item in progress when practical, and complete the todos in order.
-- Do not treat the todo list as static; update it with ` + "`todo.write`" + ` whenever scope changes, steps finish, or a task fails.
+- Do not treat the todo list as static; update it with ` + "`todowrite`" + ` whenever scope changes, steps finish, or a task fails.
 
 ## Code Writing Principles
 - Write the minimum viable code that solves the problem correctly first.
@@ -889,10 +966,42 @@ func (rt *Runtime) callChatWithTools(ctx context.Context, messages []map[string]
 		}
 	}
 
-	if rt.metrics != nil && parsed.Usage.TotalTokens > 0 {
-		rt.metrics.addTokens(int64(parsed.Usage.PromptTokens), int64(parsed.Usage.CompletionTokens))
-	}
 	return out, nil
+}
+
+func (rt *Runtime) callChatWithToolsWithRetry(ctx context.Context, messages []map[string]any, tools []map[string]any, toolChoice any, emit replEmitter) (chatResponse, error) {
+	var lastErr error
+	delay := initialDelay
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			rt.logger.Info("retrying API call", zap.Int("attempt", attempt+1), zap.Duration("delay", delay))
+			select {
+			case <-ctx.Done():
+				return chatResponse{}, ctx.Err()
+			case <-time.After(delay):
+			}
+			delay = time.Duration(float64(delay) * backoffMultiplier)
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+
+		resp, err := rt.callChatWithTools(ctx, messages, tools, toolChoice, emit)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+		rt.logger.Warn("API call failed", zap.Int("attempt", attempt+1), zap.Error(err))
+
+		if !isRetryableAPIError(err) {
+			rt.logger.Info("non-retryable error, giving up")
+			return chatResponse{}, err
+		}
+	}
+
+	return chatResponse{}, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
 func normalizeToolName(name string) string {
@@ -914,7 +1023,11 @@ func mustJSONString(v any) string {
 	if err != nil {
 		return "{}"
 	}
-	return string(data)
+	encoded, err := json.Marshal(string(data))
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
 }
 
 func formatToolPartContent(part sdk.MessagePart) string {

@@ -318,19 +318,34 @@ func (m *MemorySystem) findPatterns() []string {
 	defer m.episodic.mu.RUnlock()
 
 	var patterns []string
-	toolFrequency := make(map[string]int)
+	statusFrequency := make(map[string]int)
+	inputKeywords := make(map[string]int)
 
 	for _, event := range m.episodic.events {
 		if event.Tags != nil {
 			for _, tag := range event.Tags {
-				toolFrequency[tag]++
+				statusFrequency[tag]++
+			}
+		}
+		if event.Content != "" {
+			words := strings.Fields(event.Content)
+			for _, word := range words {
+				if len(word) > 4 {
+					inputKeywords[strings.ToLower(word)]++
+				}
 			}
 		}
 	}
 
-	for tool, freq := range toolFrequency {
+	for status, freq := range statusFrequency {
 		if freq >= 3 {
-			patterns = append(patterns, "Frequently used: "+tool)
+			patterns = append(patterns, "Often: "+status)
+		}
+	}
+
+	for keyword, freq := range inputKeywords {
+		if freq >= 2 && len(patterns) < 5 {
+			patterns = append(patterns, "Related to: "+keyword)
 		}
 	}
 
@@ -386,15 +401,16 @@ func (m *MemorySystem) pruneSemanticIfNeeded() {
 		return
 	}
 
-	var toRemove []int
 	for totalSize > m.semantic.maxBytes && len(m.semantic.facts) > 1 {
-		totalSize -= len(m.semantic.facts[0].Content)
-		toRemove = append(toRemove, 0)
+		removed := m.semantic.facts[0]
+		totalSize -= len(removed.Content)
 		m.semantic.facts = m.semantic.facts[1:]
+		m.removeSemanticFromIndex(removed)
 	}
 
-	for _, idx := range toRemove {
-		removed := m.semantic.facts[idx]
+	if totalSize > m.semantic.maxBytes && len(m.semantic.facts) > 0 {
+		removed := m.semantic.facts[0]
+		m.semantic.facts = m.semantic.facts[1:]
 		m.removeSemanticFromIndex(removed)
 	}
 }

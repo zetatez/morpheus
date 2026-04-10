@@ -239,7 +239,7 @@ func defaultAgentProfiles() map[string]AgentProfile {
 				"3. Backdoor patterns: Identify code that could provide unauthorized access (e.g., hardcoded credentials, debug endpoints)\n" +
 				"4. Security vulnerabilities: Check for common issues (SQL injection, command injection, path traversal)\n" +
 				"5. Information leakage: Detect code that reveals internal state or implementation details\n" +
-				"Use fs.read and fs.grep to inspect code thoroughly. Report findings with severity (critical/high/medium/low) and exact location.",
+				"Use read and grep to inspect code thoroughly. Report findings with severity (critical/high/medium/low) and exact location.",
 		},
 	}
 }

@@ -28,6 +28,7 @@ type InputAttachment struct {
 type UserInput struct {
 	Text        string            `json:"input"`
 	Attachments []InputAttachment `json:"attachments,omitempty"`
+	Isolated    bool              `json:"isolated,omitempty"`
 }
 
 type normalizedInput struct {

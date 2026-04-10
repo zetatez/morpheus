@@ -186,7 +186,7 @@ func (o *Orchestrator) ExecuteStep(ctx context.Context, sessionID string, step s
 		}
 		inputs["session_id"] = sessionID
 	}
-	if toolName == "mcp.query" {
+	if toolName == "mcp" {
 		if inputs == nil {
 			inputs = map[string]any{}
 		}

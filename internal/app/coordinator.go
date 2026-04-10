@@ -256,6 +256,7 @@ func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coo
 
 		for _, depID := range task.DependsOn {
 			depDone := make(chan struct{})
+			stopCh := make(chan struct{})
 			go func(id string) {
 				for {
 					mu.Lock()
@@ -266,12 +267,19 @@ func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coo
 					}
 					cond.Wait()
 					mu.Unlock()
+					select {
+					case <-stopCh:
+						return
+					default:
+					}
 				}
 			}(depID)
 
 			select {
 			case <-depDone:
+				close(stopCh)
 			case <-time.After(waitTimeout):
+				close(stopCh)
 				res := coordinatorResult{Role: task.Role, Prompt: task.Prompt, Error: "dependency timeout"}
 				mu.Lock()
 				idx := taskMap[task.ID]
@@ -281,6 +289,7 @@ func runTasksDAG(ctx context.Context, rt *Runtime, sessionID string, tasks []coo
 				cond.Broadcast()
 				return
 			case <-ctx.Done():
+				close(stopCh)
 				res := coordinatorResult{Role: task.Role, Prompt: task.Prompt, Error: "context cancelled"}
 				mu.Lock()
 				idx := taskMap[task.ID]
@@ -436,7 +445,7 @@ func agenttoolDefaultProfiles() map[string]agenttool.AgentProfile {
 				"3. Backdoor patterns: Identify code that could provide unauthorized access (e.g., hardcoded credentials, debug endpoints, hidden functionality)\n" +
 				"4. Security vulnerabilities: Check for common issues (e.g., SQL injection, command injection, path traversal, insecure deserialization)\n" +
 				"5. Information leakage: Detect code that reveals internal state, memory contents, or implementation details\n" +
-				"Use fs.read and fs.grep to inspect code thoroughly. Report all findings with severity (critical/high/medium/low) and exact location.",
+				"Use read and grep to inspect code thoroughly. Report all findings with severity (critical/high/medium/low) and exact location.",
 		},
 	}
 }

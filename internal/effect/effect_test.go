@@ -314,7 +314,7 @@ func TestOrElse(t *testing.T) {
 		return 0, fmt.Errorf("fail")
 	}
 
-	result := OrElse(fail, 99)
+	result := OrElseEffect(fail, 99)
 	if result != 99 {
 		t.Errorf("expected 99, got %d", result)
 	}
