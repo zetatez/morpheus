@@ -33,7 +33,7 @@
     "rollup": "^4.60.1",
     "tsx": "*",
     "typescript": "*",
-    "vite": "^8.0.8",
+    "vite": "^8.0.16",
     "vite-plugin-solid": "^2.11.12"
   }
 }
